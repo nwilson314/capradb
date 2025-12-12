@@ -83,11 +83,10 @@ func (p *Page) GetRecord(slotID int) ([]byte, error) {
 	if slotID < 0 || slotID >= int(p.GetSlotCount()) {
 		return nil, fmt.Errorf("invalid slotID")
 	}
-	slotSpot := HeaderSize + slotID*SlotSize
-	slotPtr := binary.LittleEndian.Uint16(p.Data[slotSpot : slotSpot+2])
-	dataLength := binary.LittleEndian.Uint16(p.Data[slotSpot+2 : slotSpot+4])
 
-	return p.Data[slotPtr : slotPtr+dataLength], nil
+	dataPtr, dataLen, _ := p.getSlotData(slotID)
+
+	return p.Data[dataPtr : dataPtr+dataLen], nil
 }
 
 func (p *Page) UpdateRecord(slotID int, data []byte) error {
@@ -95,10 +94,13 @@ func (p *Page) UpdateRecord(slotID int, data []byte) error {
 		return fmt.Errorf("invalid slotID")
 	}
 
-	dataLength := len(data)
-	slotSpot := p.GetSlotCount()*SlotSize + HeaderSize
-	if dataLength <= int(binary.LittleEndian.Uint16(p.Data[slotSpot+2:slotSpot+4])) {
-		// Just insert into existing space
+	updateLen := len(data)
+	dataPtr, dataLen, slotPtr := p.getSlotData(slotID)
+	if updateLen <= int(dataLen) {
+		// Just insert into existing space as it can fit
+		copy(p.Data[dataPtr:], data)
+		// Update slot length
+		binary.LittleEndian.PutUint16(p.Data[slotPtr+2:slotPtr+4], uint16(updateLen))
 
 		return nil
 	}
@@ -107,5 +109,29 @@ func (p *Page) UpdateRecord(slotID int, data []byte) error {
 	// currently, we will fragment the data.
 	// TODO: implement compacting
 
+	if int(updateLen) > p.GetFreeSpace() {
+		return fmt.Errorf("not enough free space for update")
+	}
+
+	newPtr := p.GetFreeSpacePointer() - uint16(updateLen)
+	copy(p.Data[newPtr:], data)
+	binary.LittleEndian.PutUint16(p.Data[slotPtr:slotPtr+2], uint16(newPtr))
+	binary.LittleEndian.PutUint16(p.Data[slotPtr+2:slotPtr+4], uint16(updateLen))
+	// Move free space pointer to the start of the data
+	binary.LittleEndian.PutUint16(p.Data[8:10], newPtr)
+
 	return nil
+}
+
+func (p *Page) getSlotData(slotID int) (uint16, uint16, int) {
+	// Returns
+	// dataPtr - pointer to slots data
+	// dataLen - length of the data
+	// slotPtr - pointer to the slot itself
+	// It's assumed that the slotID has been validated already
+	slotPtr := slotID*SlotSize + HeaderSize
+	dataPtr := binary.LittleEndian.Uint16(p.Data[slotPtr : slotPtr+2])
+	dataLen := binary.LittleEndian.Uint16(p.Data[slotPtr+2 : slotPtr+4])
+
+	return dataPtr, dataLen, slotPtr
 }
