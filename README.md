@@ -1,4 +1,4 @@
-# CapraDB 🐐
+# CapraDB
 
 **CapraDB** is a distributed SQL database built from scratch in Go.
 It is designed to be an educational deep-dive into database internals, following the architectures of systems like PostgreSQL, CockroachDB, and Vitess.
@@ -10,23 +10,65 @@ Why "Capra"? *Capra* is Latin for goat—because it eats any data you throw at i
 CapraDB follows a standard layered architecture:
 
 1.  **Disk Manager:** Manages raw file I/O, reading/writing 4KB pages.
-2.  **Buffer Pool:** Caches hot pages in RAM using LRU eviction.
+2.  **Buffer Pool:** Caches hot pages in RAM using ARC eviction policy.
 3.  **Storage Engine:** Implements **Slotted Pages** and **B+Trees** for efficient data organization.
 4.  **Execution Engine:** (Planned) Volcano-style query execution.
 5.  **Distributed Layer:** (Planned) Raft consensus for replication and sharding.
 
-## Current Status: Storage Engine (Week 3)
+## Current Status: Buffer Pool Manager (Week 6)
 
-We are currently building the fundamental storage layer.
+### Completed
 
--   **Page Layout:** 4KB Slotted Pages (Header -> Slots -> Free Space <- Data).
--   **Record Management:** Insert, Get, Update variable-length records.
--   **Upcoming:** Disk Manager (File I/O).
+- **Slotted Pages** (`storage/page`)
+  - 4KB pages with Header -> Slots -> Free Space <- Data layout
+  - Insert, Get, Update variable-length records
+
+- **Disk Manager** (`storage/disk`)
+  - File I/O for reading/writing pages
+  - Page allocation
+
+- **ARC Replacer** (`storage/replacer`)
+  - Adaptive Replacement Cache eviction policy
+  - O(1) RecordAccess, SetEvictable, Evict operations
+  - Ghost lists (B1/B2) for adaptive learning
+  - Passes CMU 15-445 test suite
+
+### In Progress
+
+- **Disk Scheduler** (`storage/disk`) - Async I/O with background worker
+- **Buffer Pool Manager** (`storage/buffer`) - Ties it all together
 
 ## Directory Structure
 
--   `storage/page`: The Slotted Page implementation.
--   `storage/disk`: (Coming soon) The Disk Manager.
+```
+storage/
+├── page/       # Slotted page implementation
+├── disk/       # Disk manager (file I/O)
+├── replacer/   # ARC cache replacement policy
+└── buffer/     # (Coming soon) Buffer pool manager
+```
+
+## Testing
+
+Run all tests:
+```bash
+go test ./...
+```
+
+Run tests for a specific package:
+```bash
+go test ./storage/replacer/... -v
+```
+
+Run the ARC performance test (CMU 15-445 threshold: 262k ops < 3s):
+```bash
+go test ./storage/replacer/... -v -run Performance
+```
+
+Run benchmarks:
+```bash
+go test ./storage/replacer/... -bench=. -benchmem
+```
 
 ## Goals
 
