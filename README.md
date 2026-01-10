@@ -33,9 +33,13 @@ CapraDB follows a standard layered architecture:
   - Ghost lists (B1/B2) for adaptive learning
   - Passes CMU 15-445 test suite
 
+- **Disk Scheduler** (`storage/disk`)
+  - Background worker goroutine with request queue
+  - Async read/write via channels
+  - Batch request support
+
 ### In Progress
 
-- **Disk Scheduler** (`storage/disk`) - Async I/O with background worker
 - **Buffer Pool Manager** (`storage/buffer`) - Ties it all together
 
 ## Directory Structure
