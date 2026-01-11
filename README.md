@@ -15,7 +15,7 @@ CapraDB follows a standard layered architecture:
 4.  **Execution Engine:** (Planned) Volcano-style query execution.
 5.  **Distributed Layer:** (Planned) Raft consensus for replication and sharding.
 
-## Current Status: Buffer Pool Manager (Week 6)
+## Current Status: Week 6 Complete
 
 ### Completed
 
@@ -38,18 +38,26 @@ CapraDB follows a standard layered architecture:
   - Async read/write via channels
   - Batch request support
 
-### In Progress
+- **Buffer Pool Manager** (`storage/buffer`)
+  - Fixed-size frame pool with page caching
+  - Page table for O(1) lookups
+  - Free list + ARC eviction for frame allocation
+  - Pin counting to prevent eviction of in-use pages
+  - Dirty page tracking and flush on eviction
+  - Thread-safe with mutex locking
 
-- **Buffer Pool Manager** (`storage/buffer`) - Ties it all together
+### Up Next
+
+- B+Tree index structure (Week 7-10)
 
 ## Directory Structure
 
 ```
 storage/
 ├── page/       # Slotted page implementation
-├── disk/       # Disk manager (file I/O)
+├── disk/       # Disk manager and scheduler
 ├── replacer/   # ARC cache replacement policy
-└── buffer/     # (Coming soon) Buffer pool manager
+└── buffer/     # Buffer pool manager
 ```
 
 ## Testing
