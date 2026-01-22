@@ -21,6 +21,7 @@ type BufferPoolManager struct {
 }
 
 type FrameHeader struct {
+	latch    sync.RWMutex
 	dirty    bool
 	pinCount uint32
 }
@@ -67,57 +68,105 @@ func (bpm *BufferPoolManager) GetPinCount(pageID uint32) (uint32, error) {
 	return frameHeader.pinCount, nil
 }
 
-func (bpm *BufferPoolManager) NewPage() (uint32, error) {
+func (bpm *BufferPoolManager) NewPage() (*WritePageGuard, error) {
 	bpm.latch.Lock()
-	defer bpm.latch.Unlock()
 
 	frameID, err := bpm.getFrame()
 	if err != nil {
-		return 0, err
+		bpm.latch.Unlock()
+		return nil, err
 	}
 
 	// create new page
 	p := bpm.dm.AllocatePage()
 	newPage := page.New(p)
+	frameHeader := bpm.frameHeaders[frameID]
 	bpm.frames[frameID] = newPage
 	bpm.pageToFrame[p] = frameID
-	bpm.frameHeaders[frameID].dirty = true
-	bpm.frameHeaders[frameID].pinCount = 1
+	frameHeader.dirty = true
+	frameHeader.pinCount = 1
 	bpm.replacer.RecordAccess(frameID, p)
 	bpm.replacer.SetEvictable(frameID, false)
-	return p, nil
+	bpm.latch.Unlock()
+	frameHeader.latch.Lock()
+	return &WritePageGuard{page: newPage, frame: frameHeader, bpm: bpm}, nil
 }
 
-func (bpm *BufferPoolManager) FetchPage(pageID uint32) (*page.Page, error) {
+func (bpm *BufferPoolManager) ReadPage(pageID uint32) (*ReadPageGuard, error) {
 	bpm.latch.Lock()
-	defer bpm.latch.Unlock()
 
 	if frameID, ok := bpm.pageToFrame[pageID]; ok {
-		// page is in memory, so just return the frame
 		frameHeader := bpm.frameHeaders[frameID]
 		frameHeader.pinCount++
 		bpm.replacer.RecordAccess(frameID, pageID)
 		bpm.replacer.SetEvictable(frameID, false)
-		return bpm.frames[frameID], nil
+		bpm.latch.Unlock()
+		frameHeader.latch.RLock()
+		return &ReadPageGuard{page: bpm.frames[frameID], frame: frameHeader, bpm: bpm}, nil
 	}
 
 	frameID, err := bpm.getFrame()
 	if err != nil {
+		bpm.latch.Unlock()
 		return nil, err
 	}
 
 	// read page from disk
 	p, err := bpm.dm.ReadPage(pageID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read page from disk: %v", err)
+		bpm.latch.Unlock()
+		return nil, err
 	}
+
 	bpm.frames[frameID] = p
+	frameHeader := bpm.frameHeaders[frameID]
 	bpm.pageToFrame[pageID] = frameID
-	bpm.frameHeaders[frameID].dirty = false
-	bpm.frameHeaders[frameID].pinCount = 1
+	frameHeader.pinCount = 1
+	frameHeader.dirty = false
 	bpm.replacer.RecordAccess(frameID, pageID)
 	bpm.replacer.SetEvictable(frameID, false)
-	return p, nil
+	bpm.latch.Unlock()
+	frameHeader.latch.RLock()
+	return &ReadPageGuard{page: bpm.frames[frameID], frame: frameHeader, bpm: bpm}, nil
+}
+
+func (bpm *BufferPoolManager) WritePage(pageID uint32) (*WritePageGuard, error) {
+	bpm.latch.Lock()
+
+	if frameID, ok := bpm.pageToFrame[pageID]; ok {
+		frameHeader := bpm.frameHeaders[frameID]
+		frameHeader.pinCount++
+		bpm.replacer.RecordAccess(frameID, pageID)
+		bpm.replacer.SetEvictable(frameID, false)
+		bpm.latch.Unlock()
+		frameHeader.latch.Lock()
+		return &WritePageGuard{page: bpm.frames[frameID], frame: frameHeader, bpm: bpm}, nil
+	}
+
+	frameID, err := bpm.getFrame()
+	if err != nil {
+		bpm.latch.Unlock()
+		return nil, err
+	}
+
+	// read page from disk
+	p, err := bpm.dm.ReadPage(pageID)
+	if err != nil {
+		bpm.latch.Unlock()
+		return nil, err
+	}
+
+	bpm.frames[frameID] = p
+	frameHeader := bpm.frameHeaders[frameID]
+	bpm.pageToFrame[pageID] = frameID
+	frameHeader.pinCount = 1
+	frameHeader.dirty = false
+	bpm.replacer.RecordAccess(frameID, pageID)
+	bpm.replacer.SetEvictable(frameID, false)
+	bpm.latch.Unlock()
+	frameHeader.latch.Lock()
+	return &WritePageGuard{page: bpm.frames[frameID], frame: frameHeader, bpm: bpm}, nil
+
 }
 
 func (bpm *BufferPoolManager) UnpinPage(pageID uint32, isDirty bool) bool {

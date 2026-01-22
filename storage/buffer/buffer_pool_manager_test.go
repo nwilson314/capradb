@@ -2,7 +2,10 @@ package buffer
 
 import (
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"capradb/storage/disk"
 )
@@ -47,10 +50,12 @@ func TestNewPage(t *testing.T) {
 	defer cleanup()
 
 	// Allocate a new page
-	pageID, err := bpm.NewPage()
+	guard, err := bpm.NewPage()
 	if err != nil {
 		t.Fatalf("NewPage failed: %v", err)
 	}
+
+	pageID := guard.page.ID
 
 	// First page should have ID 0
 	if pageID != 0 {
@@ -67,41 +72,73 @@ func TestNewPage(t *testing.T) {
 	if len(bpm.emptyFrames) != 9 {
 		t.Errorf("expected 9 free frames, got %d", len(bpm.emptyFrames))
 	}
+
+	guard.Drop()
 }
 
-func TestFetchPageInMemory(t *testing.T) {
+func TestReadPageInMemory(t *testing.T) {
 	bpm, cleanup := setupBPM(t, 10)
 	defer cleanup()
 
 	// Create a page first
-	pageID, _ := bpm.NewPage()
+	newGuard, _ := bpm.NewPage()
+	pageID := newGuard.page.ID
+	newGuard.Drop()
 
-	// Fetch the same page - should come from memory, not disk
-	page, err := bpm.FetchPage(pageID)
+	// Read the same page - should come from memory, not disk
+	readGuard, err := bpm.ReadPage(pageID)
 	if err != nil {
-		t.Fatalf("FetchPage failed: %v", err)
+		t.Fatalf("ReadPage failed: %v", err)
 	}
 
-	if page == nil {
+	if readGuard.page == nil {
 		t.Fatal("expected non-nil page")
 	}
 
-	if page.ID != pageID {
-		t.Errorf("expected page ID %d, got %d", pageID, page.ID)
+	if readGuard.page.ID != pageID {
+		t.Errorf("expected page ID %d, got %d", pageID, readGuard.page.ID)
 	}
 
-	// Pin count should now be 2 (NewPage + FetchPage)
+	// Pin count should be 1 (ReadPage)
 	pinCount, _ := bpm.GetPinCount(pageID)
-	if pinCount != 2 {
-		t.Errorf("expected pin count 2, got %d", pinCount)
+	if pinCount != 1 {
+		t.Errorf("expected pin count 1, got %d", pinCount)
 	}
+
+	readGuard.Drop()
 }
 
-func TestUnpinPage(t *testing.T) {
+func TestWritePageInMemory(t *testing.T) {
 	bpm, cleanup := setupBPM(t, 10)
 	defer cleanup()
 
-	pageID, _ := bpm.NewPage()
+	// Create a page first
+	newGuard, _ := bpm.NewPage()
+	pageID := newGuard.page.ID
+	newGuard.Drop()
+
+	// Write to the same page
+	writeGuard, err := bpm.WritePage(pageID)
+	if err != nil {
+		t.Fatalf("WritePage failed: %v", err)
+	}
+
+	writeGuard.page.InsertRecord([]byte("test data"))
+	writeGuard.Drop()
+
+	// Verify dirty flag is set
+	frameID := bpm.pageToFrame[pageID]
+	if !bpm.frameHeaders[frameID].dirty {
+		t.Error("expected frame to be marked dirty after WritePage.Drop()")
+	}
+}
+
+func TestGuardDrop(t *testing.T) {
+	bpm, cleanup := setupBPM(t, 10)
+	defer cleanup()
+
+	guard, _ := bpm.NewPage()
+	pageID := guard.page.ID
 
 	// Pin count starts at 1
 	pinCount, _ := bpm.GetPinCount(pageID)
@@ -109,32 +146,13 @@ func TestUnpinPage(t *testing.T) {
 		t.Errorf("expected pin count 1, got %d", pinCount)
 	}
 
-	// Unpin the page
-	ok := bpm.UnpinPage(pageID, false)
-	if !ok {
-		t.Error("UnpinPage returned false")
-	}
+	// Drop the guard
+	guard.Drop()
 
 	// Pin count should now be 0
 	pinCount, _ = bpm.GetPinCount(pageID)
 	if pinCount != 0 {
 		t.Errorf("expected pin count 0, got %d", pinCount)
-	}
-}
-
-func TestUnpinPageDirty(t *testing.T) {
-	bpm, cleanup := setupBPM(t, 10)
-	defer cleanup()
-
-	pageID, _ := bpm.NewPage()
-
-	// Unpin and mark dirty
-	bpm.UnpinPage(pageID, true)
-
-	// Verify it's marked dirty
-	frameID := bpm.pageToFrame[pageID]
-	if !bpm.frameHeaders[frameID].dirty {
-		t.Error("expected frame to be marked dirty")
 	}
 }
 
@@ -144,20 +162,18 @@ func TestEviction(t *testing.T) {
 	defer cleanup()
 
 	// Fill up the buffer pool
-	page0, _ := bpm.NewPage() // page 0 in frame
-	page1, _ := bpm.NewPage() // page 1 in frame
-	page2, _ := bpm.NewPage() // page 2 in frame
+	guard0, _ := bpm.NewPage()
+	page0 := guard0.page.ID
+	guard0.page.InsertRecord([]byte("hello from page 0"))
+	guard0.Drop()
 
-	// Write some data to page0 so we can verify persistence
-	p0, _ := bpm.FetchPage(page0)
-	p0.InsertRecord([]byte("hello from page 0"))
+	guard1, _ := bpm.NewPage()
+	page1 := guard1.page.ID
+	guard1.Drop()
 
-	// Unpin all pages (makes them evictable)
-	// page0 has pin count 2 (NewPage + FetchPage), so unpin twice
-	bpm.UnpinPage(page0, true) // mark dirty since we wrote data
-	bpm.UnpinPage(page0, false)
-	bpm.UnpinPage(page1, false)
-	bpm.UnpinPage(page2, false)
+	guard2, _ := bpm.NewPage()
+	page2 := guard2.page.ID
+	guard2.Drop()
 
 	// Verify all have pin count 0
 	for _, pid := range []uint32{page0, page1, page2} {
@@ -168,10 +184,11 @@ func TestEviction(t *testing.T) {
 	}
 
 	// Now create a new page - this MUST evict something
-	page3, err := bpm.NewPage()
+	guard3, err := bpm.NewPage()
 	if err != nil {
 		t.Fatalf("NewPage failed after eviction should have worked: %v", err)
 	}
+	page3 := guard3.page.ID
 
 	// We should have 3 pages in memory, one was evicted
 	if len(bpm.pageToFrame) != 3 {
@@ -183,17 +200,16 @@ func TestEviction(t *testing.T) {
 		t.Error("page3 should be in memory")
 	}
 
-	// Unpin page3 so we can potentially evict it
-	bpm.UnpinPage(page3, false)
+	guard3.Drop()
 
-	// Now fetch page0 - it should come from disk (was evicted and dirty)
-	p0Again, err := bpm.FetchPage(page0)
+	// Now read page0 - it should come from disk (was evicted and dirty)
+	readGuard, err := bpm.ReadPage(page0)
 	if err != nil {
-		t.Fatalf("FetchPage(page0) failed: %v", err)
+		t.Fatalf("ReadPage(page0) failed: %v", err)
 	}
 
 	// Verify the data we wrote persisted
-	record, err := p0Again.GetRecord(0)
+	record, err := readGuard.page.GetRecord(0)
 	if err != nil {
 		t.Fatalf("GetRecord failed: %v", err)
 	}
@@ -201,6 +217,8 @@ func TestEviction(t *testing.T) {
 	if string(record) != "hello from page 0" {
 		t.Errorf("expected 'hello from page 0', got '%s'", string(record))
 	}
+
+	readGuard.Drop()
 }
 
 func TestFlushPage(t *testing.T) {
@@ -208,11 +226,10 @@ func TestFlushPage(t *testing.T) {
 	defer cleanup()
 
 	// Create a page and write data
-	pageID, _ := bpm.NewPage()
-	p, _ := bpm.FetchPage(pageID)
-	p.InsertRecord([]byte("flush me"))
-	bpm.UnpinPage(pageID, true) // mark dirty
-	bpm.UnpinPage(pageID, false)
+	guard, _ := bpm.NewPage()
+	pageID := guard.page.ID
+	guard.page.InsertRecord([]byte("flush me"))
+	guard.Drop()
 
 	// Verify it's dirty
 	frameID := bpm.pageToFrame[pageID]
@@ -244,12 +261,10 @@ func TestFlushAllPages(t *testing.T) {
 	// Create multiple pages with data
 	var pages []uint32
 	for i := 0; i < 3; i++ {
-		pid, _ := bpm.NewPage()
-		pages = append(pages, pid)
-		p, _ := bpm.FetchPage(pid)
-		p.InsertRecord([]byte("data"))
-		bpm.UnpinPage(pid, true) // dirty
-		bpm.UnpinPage(pid, false)
+		guard, _ := bpm.NewPage()
+		pages = append(pages, guard.page.ID)
+		guard.page.InsertRecord([]byte("data"))
+		guard.Drop()
 	}
 
 	// Verify all are dirty
@@ -276,7 +291,8 @@ func TestDeletePage(t *testing.T) {
 	bpm, cleanup := setupBPM(t, 5)
 	defer cleanup()
 
-	pageID, _ := bpm.NewPage()
+	guard, _ := bpm.NewPage()
+	pageID := guard.page.ID
 
 	// Can't delete a pinned page
 	ok := bpm.DeletePage(pageID)
@@ -284,8 +300,8 @@ func TestDeletePage(t *testing.T) {
 		t.Error("should not be able to delete pinned page")
 	}
 
-	// Unpin it
-	bpm.UnpinPage(pageID, false)
+	// Drop the guard (unpin)
+	guard.Drop()
 
 	// Now delete should work
 	ok = bpm.DeletePage(pageID)
@@ -308,4 +324,315 @@ func TestDeletePage(t *testing.T) {
 	if len(bpm.emptyFrames) != 5 {
 		t.Errorf("expected 5 free frames after delete, got %d", len(bpm.emptyFrames))
 	}
+}
+
+func TestDeadlock(t *testing.T) {
+	bpm, cleanup := setupBPM(t, 10)
+	defer cleanup()
+
+	// Create two pages
+	guard0, _ := bpm.NewPage()
+	page0 := guard0.page.ID
+
+	guard1, _ := bpm.NewPage()
+	page1 := guard1.page.ID
+	guard1.Drop()
+
+	// Main thread holds write lock on page 0
+	// (guard0 is still held)
+
+	// Signal for coordination
+	var started atomic.Bool
+
+	// Spawn a child goroutine that will try to acquire page 0
+	done := make(chan bool)
+	go func() {
+		started.Store(true)
+		// This will block waiting for page 0's frame lock
+		childGuard, _ := bpm.WritePage(page0)
+		childGuard.Drop()
+		done <- true
+	}()
+
+	// Wait for child to start
+	for !started.Load() {
+		time.Sleep(time.Millisecond)
+	}
+
+	// Give the child time to block on page 0
+	time.Sleep(100 * time.Millisecond)
+
+	// This is the critical test - if Level 2 is implemented wrong, this hangs
+	writeGuard1, err := bpm.WritePage(page1)
+	if err != nil {
+		t.Fatalf("WritePage(page1) failed: %v", err)
+	}
+	writeGuard1.Drop()
+
+	// Release page 0 so child can finish
+	guard0.Drop()
+
+	// Wait for child to complete (with timeout)
+	select {
+	case <-done:
+		// Success
+	case <-time.After(5 * time.Second):
+		t.Fatal("deadlock detected - child goroutine never completed")
+	}
+}
+
+func TestContention(t *testing.T) {
+	bpm, cleanup := setupBPM(t, 10)
+	defer cleanup()
+
+	const numGoroutines = 4
+	const iterations = 10000
+
+	// Create a single page that all goroutines will fight over
+	guard, _ := bpm.NewPage()
+	pageID := guard.page.ID
+	guard.Drop()
+
+	// Channel to signal completion
+	done := make(chan bool, numGoroutines)
+
+	// Spawn multiple goroutines all writing to the same page
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			for j := 0; j < iterations; j++ {
+				writeGuard, err := bpm.WritePage(pageID)
+				if err != nil {
+					t.Errorf("goroutine %d: WritePage failed: %v", id, err)
+					done <- false
+					return
+				}
+				// Write some data (just to do something)
+				writeGuard.page.Data[0] = byte(id)
+				writeGuard.Drop()
+			}
+			done <- true
+		}(i)
+	}
+
+	// Wait for all goroutines to complete
+	for i := 0; i < numGoroutines; i++ {
+		select {
+		case success := <-done:
+			if !success {
+				t.Fatal("a goroutine failed")
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("timeout - possible deadlock under contention")
+		}
+	}
+}
+
+func TestPageAccess(t *testing.T) {
+	bpm, cleanup := setupBPM(t, 1)
+	defer cleanup()
+
+	const rounds = 50
+
+	guard, _ := bpm.NewPage()
+	pageID := guard.page.ID
+	guard.Drop()
+
+	// Writer goroutine - keeps updating the page
+	go func() {
+		for i := 0; i < rounds; i++ {
+			time.Sleep(5 * time.Millisecond)
+			writeGuard, _ := bpm.WritePage(pageID)
+			// Write the current iteration number to the page
+			writeGuard.page.Data[0] = byte(i)
+			writeGuard.Drop()
+		}
+	}()
+
+	// Main thread - reader
+	for i := 0; i < rounds; i++ {
+		// Wait a bit to let writer potentially write
+		time.Sleep(10 * time.Millisecond)
+
+		// Take read lock
+		readGuard, _ := bpm.ReadPage(pageID)
+
+		// Save what we see
+		snapshot := readGuard.page.Data[0]
+
+		// Sleep while holding the read lock
+		// If locking works, the writer cannot modify the page during this time
+		time.Sleep(10 * time.Millisecond)
+
+		// Check data hasn't changed
+		if readGuard.page.Data[0] != snapshot {
+			t.Fatalf("data changed while holding read lock! was %d, now %d", snapshot, readGuard.page.Data[0])
+		}
+
+		readGuard.Drop()
+	}
+}
+
+func TestEvictable(t *testing.T) {
+	// Single frame buffer pool - forces eviction attempts
+	bpm, cleanup := setupBPM(t, 1)
+	defer cleanup()
+
+	const rounds = 100
+	const numReaders = 4
+
+	for round := 0; round < rounds; round++ {
+		// Create two pages - only one can be in memory at a time
+		winnerGuard, _ := bpm.NewPage()
+		winnerID := winnerGuard.page.ID
+		winnerGuard.Drop()
+
+		loserGuard, _ := bpm.NewPage()
+		loserID := loserGuard.page.ID
+		loserGuard.Drop()
+
+		// Winner is now evicted (loser took the only frame)
+		// Bring winner back in
+		mainGuard, _ := bpm.ReadPage(winnerID)
+
+		// Now: winner is in the only frame, pinned by mainGuard
+		// loser is on disk
+
+		// Spawn readers that will also read the winner page
+		var wg sync.WaitGroup
+		wg.Add(numReaders)
+
+		for i := 0; i < numReaders; i++ {
+			go func() {
+				defer wg.Done()
+
+				// Read the winner page (should succeed - it's in memory)
+				readGuard, err := bpm.ReadPage(winnerID)
+				if err != nil {
+					t.Errorf("ReadPage(winner) failed: %v", err)
+					return
+				}
+
+				// While holding the read lock, try to bring in the loser
+				// This should fail - the only frame is pinned
+				loserReadGuard, err := bpm.ReadPage(loserID)
+				if err == nil {
+					// This shouldn't happen - where did loser go?
+					// The only frame is pinned by winner
+					loserReadGuard.Drop()
+					t.Errorf("ReadPage(loser) should have failed - no evictable frames")
+				}
+
+				readGuard.Drop()
+			}()
+		}
+
+		wg.Wait()
+		mainGuard.Drop()
+	}
+}
+
+// Benchmarks
+
+func BenchmarkSequentialRead(b *testing.B) {
+	tmpFile, _ := os.CreateTemp("", "bpm_bench_*.db")
+	tmpFile.Close()
+	dm, _ := disk.NewDiskManager(tmpFile.Name())
+	scheduler := disk.NewDiskScheduler(dm)
+	bpm := NewBufferPoolManager(10, dm, scheduler)
+
+	defer func() {
+		scheduler.Shutdown()
+		dm.Close()
+		os.Remove(tmpFile.Name())
+	}()
+
+	// Create a page to read
+	guard, _ := bpm.NewPage()
+	pageID := guard.page.ID
+	guard.Drop()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		readGuard, _ := bpm.ReadPage(pageID)
+		readGuard.Drop()
+	}
+}
+
+func BenchmarkSequentialWrite(b *testing.B) {
+	tmpFile, _ := os.CreateTemp("", "bpm_bench_*.db")
+	tmpFile.Close()
+	dm, _ := disk.NewDiskManager(tmpFile.Name())
+	scheduler := disk.NewDiskScheduler(dm)
+	bpm := NewBufferPoolManager(10, dm, scheduler)
+
+	defer func() {
+		scheduler.Shutdown()
+		dm.Close()
+		os.Remove(tmpFile.Name())
+	}()
+
+	// Create a page to write
+	guard, _ := bpm.NewPage()
+	pageID := guard.page.ID
+	guard.Drop()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		writeGuard, _ := bpm.WritePage(pageID)
+		writeGuard.Drop()
+	}
+}
+
+func BenchmarkParallelRead(b *testing.B) {
+	tmpFile, _ := os.CreateTemp("", "bpm_bench_*.db")
+	tmpFile.Close()
+	dm, _ := disk.NewDiskManager(tmpFile.Name())
+	scheduler := disk.NewDiskScheduler(dm)
+	bpm := NewBufferPoolManager(10, dm, scheduler)
+
+	defer func() {
+		scheduler.Shutdown()
+		dm.Close()
+		os.Remove(tmpFile.Name())
+	}()
+
+	// Create a page to read
+	guard, _ := bpm.NewPage()
+	pageID := guard.page.ID
+	guard.Drop()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			readGuard, _ := bpm.ReadPage(pageID)
+			readGuard.Drop()
+		}
+	})
+}
+
+func BenchmarkParallelWrite(b *testing.B) {
+	tmpFile, _ := os.CreateTemp("", "bpm_bench_*.db")
+	tmpFile.Close()
+	dm, _ := disk.NewDiskManager(tmpFile.Name())
+	scheduler := disk.NewDiskScheduler(dm)
+	bpm := NewBufferPoolManager(10, dm, scheduler)
+
+	defer func() {
+		scheduler.Shutdown()
+		dm.Close()
+		os.Remove(tmpFile.Name())
+	}()
+
+	// Create a page to write
+	guard, _ := bpm.NewPage()
+	pageID := guard.page.ID
+	guard.Drop()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			writeGuard, _ := bpm.WritePage(pageID)
+			writeGuard.Drop()
+		}
+	})
 }
