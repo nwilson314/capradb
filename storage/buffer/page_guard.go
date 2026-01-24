@@ -39,10 +39,6 @@ func (g *WritePageGuard) Drop() {
 	g.bpm.latch.Unlock()
 }
 
-func (g *ReadPageGuard) PageID() uint32 {
-	return g.page.ID
-}
-
 func (g *WritePageGuard) PageID() uint32 {
 	return g.page.ID
 }
@@ -51,6 +47,30 @@ func (g *WritePageGuard) InsertRecord(data []byte) (int, error) {
 	return g.page.InsertRecord(data)
 }
 
+func (g *WritePageGuard) GetRecord(slotID int) ([]byte, error) {
+	return g.page.GetRecord(slotID)
+}
+
+func (g *WritePageGuard) UpdateRecord(slotID int, data []byte) error {
+	return g.page.UpdateRecord(slotID, data)
+}
+
+func (g *WritePageGuard) DeleteRecord(slotID int) error {
+	return g.page.DeleteRecord(slotID)
+}
+
+func (g *WritePageGuard) GetFreeSpace() int {
+	return g.page.GetFreeSpace()
+}
+
+func (g *ReadPageGuard) PageID() uint32 {
+	return g.page.ID
+}
+
 func (g *ReadPageGuard) GetRecord(slotID int) ([]byte, error) {
 	return g.page.GetRecord(slotID)
+}
+
+func (g *ReadPageGuard) GetSlotCount() uint16 {
+	return g.page.GetSlotCount()
 }

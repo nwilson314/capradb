@@ -2,6 +2,7 @@ package page
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 )
 
@@ -16,6 +17,10 @@ Slot Layout (Total 4 Bytes):
 2-3 (2 bytes): Length (uint16)
 */
 
+/*
+A deleted slot is marked as deleted by setting the length to 0.
+*/
+
 const (
 	PageSize   = 4096
 	HeaderSize = 12
@@ -26,6 +31,8 @@ type Page struct {
 	ID   uint32
 	Data [PageSize]byte
 }
+
+var ErrSlotDeleted = errors.New("slot is deleted")
 
 func New(id uint32) *Page {
 	p := &Page{
@@ -86,6 +93,10 @@ func (p *Page) GetRecord(slotID int) ([]byte, error) {
 
 	dataPtr, dataLen, _ := p.getSlotData(slotID)
 
+	if dataLen == 0 {
+		return nil, ErrSlotDeleted
+	}
+
 	return p.Data[dataPtr : dataPtr+dataLen], nil
 }
 
@@ -96,6 +107,9 @@ func (p *Page) UpdateRecord(slotID int, data []byte) error {
 
 	updateLen := len(data)
 	dataPtr, dataLen, slotPtr := p.getSlotData(slotID)
+	if dataLen == 0 {
+		return fmt.Errorf("slot is deleted")
+	}
 	if updateLen <= int(dataLen) {
 		// Just insert into existing space as it can fit
 		copy(p.Data[dataPtr:], data)
@@ -119,6 +133,23 @@ func (p *Page) UpdateRecord(slotID int, data []byte) error {
 	binary.LittleEndian.PutUint16(p.Data[slotPtr+2:slotPtr+4], uint16(updateLen))
 	// Move free space pointer to the start of the data
 	binary.LittleEndian.PutUint16(p.Data[8:10], newPtr)
+
+	return nil
+}
+
+func (p *Page) DeleteRecord(slotID int) error {
+	if slotID < 0 || slotID >= int(p.GetSlotCount()) {
+		return fmt.Errorf("invalid slotID")
+	}
+
+	_, dataLen, slotPtr := p.getSlotData(slotID)
+
+	if dataLen == 0 {
+		// already deleted
+		return nil
+	}
+
+	binary.LittleEndian.PutUint16(p.Data[slotPtr+2:slotPtr+4], 0)
 
 	return nil
 }
