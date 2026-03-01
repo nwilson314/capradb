@@ -15,7 +15,7 @@ CapraDB follows a standard layered architecture:
 4.  **Execution Engine:** (Planned) Volcano-style query execution.
 5.  **Distributed Layer:** (Planned) Raft consensus for replication and sharding.
 
-## Current Status: Week 6 Complete
+## Current Status
 
 ### Completed
 
@@ -44,11 +44,18 @@ CapraDB follows a standard layered architecture:
   - Free list + ARC eviction for frame allocation
   - Pin counting to prevent eviction of in-use pages
   - Dirty page tracking and flush on eviction
-  - Thread-safe with mutex locking
+  - Level 2 locking with per-frame latches (passes CMU deadlock test)
+  - Page guards for RAII-style lock management
+  - 3M+ ops/sec on concurrency benchmarks
+
+- **Heap File** (`storage/heap`)
+  - Table heap with linked list of slotted pages
+  - Record IDs (page ID + slot number)
+  - Table scan iterator
 
 ### Up Next
 
-- B+Tree index structure (Week 7-10)
+- B+Tree index: leaf nodes, internal nodes, range scans, deletion, integration
 
 ## Directory Structure
 
@@ -57,7 +64,8 @@ storage/
 ├── page/       # Slotted page implementation
 ├── disk/       # Disk manager and scheduler
 ├── replacer/   # ARC cache replacement policy
-└── buffer/     # Buffer pool manager
+├── buffer/     # Buffer pool manager with page guards
+└── heap/       # Table heap and scan iterator
 ```
 
 ## Testing

@@ -52,7 +52,6 @@ func (i *TableIterator) Next() ([]byte, RID, error) {
 		return nil, RID{}, io.EOF
 	}
 
-	// currentPageID := i.current.PageID
 	currentSlotID := i.current.SlotID
 
 	if currentSlotID >= i.currentPageGuard.GetSlotCount() {
