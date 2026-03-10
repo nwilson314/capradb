@@ -1,4 +1,4 @@
-package heap
+package page
 
 type RID struct {
 	PageID uint32

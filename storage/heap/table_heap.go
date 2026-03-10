@@ -2,6 +2,7 @@ package heap
 
 import (
 	"capradb/storage/buffer"
+	"capradb/storage/page"
 	"encoding/binary"
 )
 
@@ -51,16 +52,16 @@ func NewTableHeap(bpm *buffer.BufferPoolManager) (*TableHeap, error) {
 	}, nil
 }
 
-func (h *TableHeap) InsertRecord(record []byte) (RID, error) {
+func (h *TableHeap) InsertRecord(record []byte) (page.RID, error) {
 	headerPageGuard, err := h.bpm.WritePage(h.headerPageID)
 	if err != nil {
-		return RID{}, err
+		return page.RID{}, err
 	}
 
 	// header page data is always the first record in header page
 	headerPageData, err := headerPageGuard.GetRecord(0)
 	if err != nil {
-		return RID{}, err
+		return page.RID{}, err
 	}
 
 	numberPages := binary.LittleEndian.Uint32(headerPageData[0:4])
@@ -70,7 +71,7 @@ func (h *TableHeap) InsertRecord(record []byte) (RID, error) {
 
 	lastPageGuard, err := h.bpm.WritePage(lastPageID)
 	if err != nil {
-		return RID{}, err
+		return page.RID{}, err
 	}
 
 	freeSpace := lastPageGuard.GetFreeSpace()
@@ -81,7 +82,7 @@ func (h *TableHeap) InsertRecord(record []byte) (RID, error) {
 		lastPageGuard.Drop()
 		newPage, err := h.bpm.NewPage()
 		if err != nil {
-			return RID{}, err
+			return page.RID{}, err
 		}
 
 		newPageID := newPage.PageID()
@@ -95,18 +96,18 @@ func (h *TableHeap) InsertRecord(record []byte) (RID, error) {
 
 		update_err := headerPageGuard.UpdateRecord(0, headerPageData[:])
 		if update_err != nil {
-			return RID{}, update_err
+			return page.RID{}, update_err
 		}
 
 		slotID, insert_err := newPage.InsertRecord(record)
 		if insert_err != nil {
-			return RID{}, insert_err
+			return page.RID{}, insert_err
 		}
 
 		headerPageGuard.Drop()
 		newPage.Drop()
 
-		return RID{
+		return page.RID{
 			PageID: newPageID,
 			SlotID: uint16(slotID),
 		}, nil
@@ -115,19 +116,19 @@ func (h *TableHeap) InsertRecord(record []byte) (RID, error) {
 
 	slotID, insert_err := lastPageGuard.InsertRecord(record)
 	if insert_err != nil {
-		return RID{}, insert_err
+		return page.RID{}, insert_err
 	}
 
 	headerPageGuard.Drop()
 	lastPageGuard.Drop()
 
-	return RID{
+	return page.RID{
 		PageID: lastPageID,
 		SlotID: uint16(slotID),
 	}, nil
 }
 
-func (h *TableHeap) GetRecord(rid RID) ([]byte, error) {
+func (h *TableHeap) GetRecord(rid page.RID) ([]byte, error) {
 	pageGuard, err := h.bpm.ReadPage(rid.PageID)
 	if err != nil {
 		return nil, err
@@ -143,7 +144,7 @@ func (h *TableHeap) GetRecord(rid RID) ([]byte, error) {
 	return record, nil
 }
 
-func (h *TableHeap) DeleteRecord(rid RID) error {
+func (h *TableHeap) DeleteRecord(rid page.RID) error {
 	pageGuard, err := h.bpm.WritePage(rid.PageID)
 	if err != nil {
 		return err

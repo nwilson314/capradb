@@ -49,23 +49,32 @@ CapraDB follows a standard layered architecture:
   - 3M+ ops/sec on concurrency benchmarks
 
 - **Heap File** (`storage/heap`)
-  - Table heap with linked list of slotted pages
+  - Table heap with page directory (header page tracks data pages by ID)
   - Record IDs (page ID + slot number)
   - Table scan iterator
 
+- **B+Tree Page Format** (`storage/page/btree_page.go`)
+  - Separate page format from slotted pages (fixed-size sorted entry array)
+  - 20-byte header: page ID, LSN, node type, current/max size, sibling/rightmost pointer
+  - Internal entries: uint64 key + child page ID (12 bytes, max 339/page)
+  - Leaf entries: uint64 key + RID (14 bytes, max 291/page)
+  - Binary search, sorted insert with shift, delete with shift
+  - Full test coverage
+
 ### Up Next
 
-- B+Tree index: leaf nodes, internal nodes, range scans, deletion, integration
+- B+Tree tree layer (`storage/index/`): search, insert with splits, iterator, delete with merge
 
 ## Directory Structure
 
 ```
 storage/
-├── page/       # Slotted page implementation
+├── page/       # Slotted page + B+tree page implementations
 ├── disk/       # Disk manager and scheduler
 ├── replacer/   # ARC cache replacement policy
 ├── buffer/     # Buffer pool manager with page guards
-└── heap/       # Table heap and scan iterator
+├── heap/       # Table heap and scan iterator
+└── index/      # (Up next) B+tree index
 ```
 
 ## Testing

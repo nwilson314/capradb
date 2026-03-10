@@ -1,10 +1,9 @@
 package disk
 
 import (
+	"capradb/storage/page"
 	"fmt"
 	"os"
-
-	"capradb/storage/page"
 )
 
 type DiskManager struct {

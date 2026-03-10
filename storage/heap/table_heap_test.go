@@ -6,6 +6,7 @@ import (
 
 	"capradb/storage/buffer"
 	"capradb/storage/disk"
+	"capradb/storage/page"
 )
 
 func setupBPM(t *testing.T, poolSize uint32) (*buffer.BufferPoolManager, func()) {
@@ -89,7 +90,7 @@ func TestTableHeap_InsertRecord_SpansMultiplePages(t *testing.T) {
 		bigRecord[i] = byte(i % 256)
 	}
 
-	var rids []RID
+	var rids []page.RID
 	firstPageID := uint32(0)
 
 	for i := 0; i < 10; i++ {
@@ -339,7 +340,7 @@ func TestTableIterator_MultiplePages(t *testing.T) {
 	// ~4 records per page, so 10 records = 3 pages
 	type insertedRecord struct {
 		data []byte
-		rid  RID
+		rid  page.RID
 	}
 
 	var records []insertedRecord
@@ -459,7 +460,7 @@ func TestTableIterator_AllDeleted(t *testing.T) {
 	}
 
 	// Insert 3 records, delete all of them
-	var rids []RID
+	var rids []page.RID
 	for i := 0; i < 3; i++ {
 		rid, err := heap.InsertRecord([]byte("doomed"))
 		if err != nil {
