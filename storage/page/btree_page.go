@@ -265,7 +265,6 @@ func (p *BTreePage) SetSiblingPointer(siblingPageID uint32) {
 		binary.LittleEndian.PutUint32(p.Data[16:20], siblingPageID)
 	}
 	// Internal nodes don't have a sibling pointer
-	return
 }
 
 func (p *BTreePage) searchEntries(key uint64, nodeSize int) (int, bool) {
