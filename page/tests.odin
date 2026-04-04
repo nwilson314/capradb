@@ -9,19 +9,19 @@ test_new_page :: proc(t: ^testing.T) {
     defer free(pg)
 
     // Header fields
-    id, id_ok := utils.read_val(u32, pg.data[:], 0)
+    id, id_ok := utils.read_u32_le(pg.data[:], 0)
     testing.expect(t, id_ok, "should read page ID")
     testing.expect_value(t, id, u32(1))
 
-    lsn, lsn_ok := utils.read_val(u32, pg.data[:], 4)
+    lsn, lsn_ok := utils.read_u32_le(pg.data[:], 4)
     testing.expect(t, lsn_ok, "should read LSN")
     testing.expect_value(t, lsn, u32(0))
 
-    fsp, fsp_ok := utils.read_val(u16, pg.data[:], 8)
+    fsp, fsp_ok := utils.read_u16_le(pg.data[:], 8)
     testing.expect(t, fsp_ok, "should read free space pointer")
     testing.expect_value(t, fsp, u16(PAGE_SIZE))
 
-    slot_count, sc_ok := utils.read_val(u16, pg.data[:], 10)
+    slot_count, sc_ok := utils.read_u16_le(pg.data[:], 10)
     testing.expect(t, sc_ok, "should read slot count")
     testing.expect_value(t, slot_count, u16(0))
 }
@@ -36,19 +36,19 @@ test_insert_single_record :: proc(t: ^testing.T) {
     testing.expect(t, ok, "insert should succeed")
 
     // Slot count should be 1
-    slot_count, _ := utils.read_val(u16, pg.data[:], 10)
+    slot_count, _ := utils.read_u16_le(pg.data[:], 10)
     testing.expect_value(t, slot_count, u16(1))
 
     // Free space pointer should have moved down by 4 bytes
-    fsp, _ := utils.read_val(u16, pg.data[:], 8)
+    fsp, _ := utils.read_u16_le(pg.data[:], 8)
     testing.expect_value(t, fsp, u16(PAGE_SIZE - 4))
 
     // Slot 0: offset should point to where data was written
-    slot_offset, _ := utils.read_val(u16, pg.data[:], HEADER_SIZE)
+    slot_offset, _ := utils.read_u16_le(pg.data[:], HEADER_SIZE)
     testing.expect_value(t, slot_offset, u16(PAGE_SIZE - 4))
 
     // Slot 0: length should be 4
-    slot_len, _ := utils.read_val(u16, pg.data[:], HEADER_SIZE + 2)
+    slot_len, _ := utils.read_u16_le(pg.data[:], HEADER_SIZE + 2)
     testing.expect_value(t, slot_len, u16(4))
 
     // Actual bytes at the end of the page
@@ -72,11 +72,11 @@ test_insert_two_records :: proc(t: ^testing.T) {
     testing.expect(t, ok2, "second insert should succeed")
 
     // Slot count should be 2
-    slot_count, _ := utils.read_val(u16, pg.data[:], 10)
+    slot_count, _ := utils.read_u16_le(pg.data[:], 10)
     testing.expect_value(t, slot_count, u16(2))
 
     // Free space pointer: 4096 - 2 - 3 = 4091
-    fsp, _ := utils.read_val(u16, pg.data[:], 8)
+    fsp, _ := utils.read_u16_le(pg.data[:], 8)
     testing.expect_value(t, fsp, u16(4091))
 
     // First record bytes at 4094-4095
@@ -158,7 +158,7 @@ test_delete_record :: proc(t: ^testing.T) {
     testing.expect(t, !get_ok, "get on deleted record should fail")
 
     // Slot count should NOT change (tombstone, not removal)
-    slot_count, _ := utils.read_val(u16, pg.data[:], 10)
+    slot_count, _ := utils.read_u16_le(pg.data[:], 10)
     testing.expect_value(t, slot_count, u16(2))
 
     // Other record still accessible
@@ -198,7 +198,7 @@ test_update_same_size :: proc(t: ^testing.T) {
     r := [?]u8{0xAA, 0xBB, 0xCC}
     insert_record(pg, r[:])
 
-    fsp_before, _ := utils.read_val(u16, pg.data[:], 8)
+    fsp_before, _ := utils.read_u16_le(pg.data[:], 8)
 
     new_r := [?]u8{0x11, 0x22, 0x33}
     ok := update_record(pg, 0, new_r[:])
@@ -212,7 +212,7 @@ test_update_same_size :: proc(t: ^testing.T) {
     testing.expect_value(t, data[2], u8(0x33))
 
     // Free space pointer should not move
-    fsp_after, _ := utils.read_val(u16, pg.data[:], 8)
+    fsp_after, _ := utils.read_u16_le(pg.data[:], 8)
     testing.expect_value(t, fsp_after, fsp_before)
 }
 
@@ -244,7 +244,7 @@ test_update_bigger :: proc(t: ^testing.T) {
     r := [?]u8{0xAA, 0xBB}
     insert_record(pg, r[:])
 
-    fsp_before, _ := utils.read_val(u16, pg.data[:], 8)
+    fsp_before, _ := utils.read_u16_le(pg.data[:], 8)
 
     new_r := [?]u8{0x11, 0x22, 0x33, 0x44, 0x55}
     ok := update_record(pg, 0, new_r[:])
@@ -258,7 +258,7 @@ test_update_bigger :: proc(t: ^testing.T) {
     testing.expect_value(t, data[4], u8(0x55))
 
     // Free space pointer should have moved down (old space wasted + new space allocated)
-    fsp_after, _ := utils.read_val(u16, pg.data[:], 8)
+    fsp_after, _ := utils.read_u16_le(pg.data[:], 8)
     testing.expect(t, fsp_after < fsp_before, "fsp should move down for bigger record")
 }
 
@@ -300,7 +300,7 @@ test_insert_reuses_tombstone :: proc(t: ^testing.T) {
     delete_record(pg, 0)
 
     // Slot count is 2
-    sc_before, _ := utils.read_val(u16, pg.data[:], 10)
+    sc_before, _ := utils.read_u16_le(pg.data[:], 10)
     testing.expect_value(t, sc_before, u16(2))
 
     // Insert new record — should reuse slot 0
@@ -308,7 +308,7 @@ test_insert_reuses_tombstone :: proc(t: ^testing.T) {
     insert_record(pg, r3[:])
 
     // Slot count should still be 2
-    sc_after, _ := utils.read_val(u16, pg.data[:], 10)
+    sc_after, _ := utils.read_u16_le(pg.data[:], 10)
     testing.expect_value(t, sc_after, u16(2))
 
     // Slot 0 should have the new data
@@ -339,12 +339,12 @@ test_compact_reclaims_deleted_space :: proc(t: ^testing.T) {
     // Delete middle record
     delete_record(pg, 1)
 
-    fsp_before, _ := utils.read_val(u16, pg.data[:], 8)
+    fsp_before, _ := utils.read_u16_le(pg.data[:], 8)
 
     compact_page(pg)
 
     // Free space pointer should move up (reclaimed 2 bytes from deleted record)
-    fsp_after, _ := utils.read_val(u16, pg.data[:], 8)
+    fsp_after, _ := utils.read_u16_le(pg.data[:], 8)
     testing.expect(t, fsp_after > fsp_before, "fsp should move up after compaction")
 
     // Surviving records should still be readable with correct data
@@ -381,12 +381,12 @@ test_compact_after_update_bigger :: proc(t: ^testing.T) {
     new_r := [?]u8{0x11, 0x22, 0x33, 0x44}
     update_record(pg, 0, new_r[:])
 
-    fsp_before, _ := utils.read_val(u16, pg.data[:], 8)
+    fsp_before, _ := utils.read_u16_le(pg.data[:], 8)
 
     compact_page(pg)
 
     // Should reclaim the old 2 bytes of dead space
-    fsp_after, _ := utils.read_val(u16, pg.data[:], 8)
+    fsp_after, _ := utils.read_u16_le(pg.data[:], 8)
     testing.expect(t, fsp_after > fsp_before, "fsp should move up after compaction")
 
     // Both records should still be correct
@@ -411,12 +411,12 @@ test_compact_no_dead_space :: proc(t: ^testing.T) {
     insert_record(pg, r1[:])
     insert_record(pg, r2[:])
 
-    fsp_before, _ := utils.read_val(u16, pg.data[:], 8)
+    fsp_before, _ := utils.read_u16_le(pg.data[:], 8)
 
     compact_page(pg)
 
     // Nothing to reclaim — fsp should stay the same
-    fsp_after, _ := utils.read_val(u16, pg.data[:], 8)
+    fsp_after, _ := utils.read_u16_le(pg.data[:], 8)
     testing.expect_value(t, fsp_after, fsp_before)
 
     // Data still correct

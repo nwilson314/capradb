@@ -3,67 +3,67 @@ package utils
 import "core:testing"
 
 @(test)
-test_read_val_u16 :: proc(t: ^testing.T) {
+test_read_u16_le :: proc(t: ^testing.T) {
     data: [8]u8
     data[2] = 0xAB
     data[3] = 0xCD
 
-    val, ok := read_val(u16, data[:], 2)
-    testing.expect(t, ok, "read_val should succeed")
-    testing.expect_value(t, val, 0xCDAB) // little-endian
+    val, ok := read_u16_le(data[:], 2)
+    testing.expect(t, ok, "read_u16_le should succeed")
+    testing.expect_value(t, val, 0xCDAB)
 }
 
 @(test)
-test_read_val_u32 :: proc(t: ^testing.T) {
+test_read_u32_le :: proc(t: ^testing.T) {
     data: [8]u8
     data[0] = 0x01
     data[1] = 0x00
     data[2] = 0x00
     data[3] = 0x00
 
-    val, ok := read_val(u32, data[:], 0)
-    testing.expect(t, ok, "read_val should succeed")
+    val, ok := read_u32_le(data[:], 0)
+    testing.expect(t, ok, "read_u32_le should succeed")
     testing.expect_value(t, val, 1)
 }
 
 @(test)
-test_read_val_out_of_bounds :: proc(t: ^testing.T) {
+test_read_u32_le_out_of_bounds :: proc(t: ^testing.T) {
     data: [4]u8
 
-    _, ok := read_val(u32, data[:], 2)
-    testing.expect(t, !ok, "read_val should fail when out of bounds")
+    _, ok := read_u32_le(data[:], 2)
+    testing.expect(t, !ok, "read_u32_le should fail when out of bounds")
 }
 
 @(test)
-test_write_val_u16 :: proc(t: ^testing.T) {
+test_write_u16_le :: proc(t: ^testing.T) {
     data: [8]u8
 
-    write_ok := write_val(u16, data[:], 4, 0x1234)
-    testing.expect(t, write_ok, "write_val should succeed")
+    write_ok := write_u16_le(data[:], 4, 0x1234)
+    testing.expect(t, write_ok, "write_u16_le should succeed")
 
-    val, read_ok := read_val(u16, data[:], 4)
-    testing.expect(t, read_ok, "read_val should succeed")
+    val, read_ok := read_u16_le(data[:], 4)
+    testing.expect(t, read_ok, "read_u16_le should succeed")
     testing.expect_value(t, val, 0x1234)
 }
 
 @(test)
-test_write_val_u32 :: proc(t: ^testing.T) {
+test_write_u32_le :: proc(t: ^testing.T) {
     data: [8]u8
 
-    write_ok := write_val(u32, data[:], 0, 42)
-    testing.expect(t, write_ok, "write_val should succeed")
+    write_ok := write_u32_le(data[:], 0, 42)
+    testing.expect(t, write_ok, "write_u32_le should succeed")
 
-    val, read_ok := read_val(u32, data[:], 0)
-    testing.expect(t, read_ok, "read_val should succeed")
+    val, read_ok := read_u32_le(data[:], 0)
+    testing.expect(t, read_ok, "read_u32_le should succeed")
     testing.expect_value(t, val, 42)
 }
 
 @(test)
-test_write_val_out_of_bounds :: proc(t: ^testing.T) {
+test_write_u32_le_out_of_bounds :: proc(t: ^testing.T) {
     data: [4]u8
 
-    ok := write_val(u32, data[:], 3, 99)
-    testing.expect(t, !ok, "write_val should fail when out of bounds")
+    ok := write_u32_le(data[:], 3, 99)
+    testing.expect(t, !ok, "write_u32_le should fail when out of bounds")
 }
 
 @(test)

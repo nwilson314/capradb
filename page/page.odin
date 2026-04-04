@@ -35,14 +35,14 @@ new_page :: proc(id: u32) -> ^Page {
     page.id = id
     page.data = [PAGE_SIZE]u8{}
 
-    utils.write_val(u32, page.data[:], 0, id)
-    utils.write_val(u32, page.data[:], 8, PAGE_SIZE)
+    utils.write_u32_le(page.data[:], 0, id)
+    utils.write_u16_le(page.data[:], 8, PAGE_SIZE)
 
     return page
 }
 
 _get_free_space_ptr :: proc(page: ^Page) -> u16 {
-    fsp, ok := utils.read_val(u16, page.data[:], 8)
+    fsp, ok := utils.read_u16_le(page.data[:], 8)
     if !ok {
         return 0
     }
@@ -50,7 +50,7 @@ _get_free_space_ptr :: proc(page: ^Page) -> u16 {
 }
 
 _get_slot_count :: proc(page: ^Page) -> u16 {
-    sc, _ := utils.read_val(u16, page.data[:], 10)
+    sc, _ := utils.read_u16_le(page.data[:], 10)
 
     return sc
 }
@@ -70,8 +70,8 @@ _get_free_space :: proc(page: ^Page) -> u16 {
 // - offset to the slot itself
 _get_slot_data :: proc(page: ^Page, slot_id: u16) -> (u16, u16, u32) {
     slot_offset := u32(slot_id*SLOT_SIZE + HEADER_SIZE)
-    data_offset, _ := utils.read_val(u16, page.data[:], slot_offset)
-    data_len, _ := utils.read_val(u16, page.data[:], slot_offset + 2)
+    data_offset, _ := utils.read_u16_le(page.data[:], slot_offset)
+    data_len, _ := utils.read_u16_le(page.data[:], slot_offset + 2)
     return data_offset, data_len, slot_offset
 }
 
@@ -101,18 +101,18 @@ insert_record :: proc(page: ^Page, data: []u8) -> bool {
     data_offset := int(_get_free_space_ptr(page)) - data_len
 
     // Insert slot information
-    utils.write_val(u16, page.data[:], u32(slot_spot), u16(data_offset))
-    utils.write_val(u16, page.data[:], u32(slot_spot + 2), u16(data_len))
+    utils.write_u16_le(page.data[:], u32(slot_spot), u16(data_offset))
+    utils.write_u16_le(page.data[:], u32(slot_spot + 2), u16(data_len))
 
     // Insert data
     utils.write_bytes(page.data[:], u32(data_offset), data[:])
 
     // Update free space pointer
-    utils.write_val(u16, page.data[:], 8, u16(data_offset))
+    utils.write_u16_le(page.data[:], 8, u16(data_offset))
 
     // Update slot count if not reusing a tombstone
     if !found {
-        utils.write_val(u16, page.data[:], 10, _get_slot_count(page) + 1)
+        utils.write_u16_le(page.data[:], 10, _get_slot_count(page) + 1)
     }
 
     return true
@@ -142,7 +142,7 @@ delete_record :: proc(page: ^Page, slot_id: u16) -> bool {
         return false
     }
 
-    utils.write_val(u16, page.data[:], u32(slot_offset + 2), 0)
+    utils.write_u16_le(page.data[:], u32(slot_offset + 2), 0)
     return true
 }
 
@@ -161,7 +161,7 @@ update_record :: proc(page: ^Page, slot_id: u16, data: []u8) -> bool {
         // update in place
         utils.write_bytes(page.data[:], u32(data_offset), data[:])
         // update slot length
-        utils.write_val(u16, page.data[:], u32(slot_offset + 2), u16(update_len))
+        utils.write_u16_le(page.data[:], u32(slot_offset + 2), u16(update_len))
         return true
     }
 
@@ -177,12 +177,12 @@ update_record :: proc(page: ^Page, slot_id: u16, data: []u8) -> bool {
     new_data_offset := int(_get_free_space_ptr(page)) - update_len
     utils.write_bytes(page.data[:], u32(new_data_offset), data[:])
     // slot_offset
-    utils.write_val(u16, page.data[:], u32(slot_offset), u16(new_data_offset))
+    utils.write_u16_le(page.data[:], u32(slot_offset), u16(new_data_offset))
     // update slot length
-    utils.write_val(u16, page.data[:], u32(slot_offset + 2), u16(update_len))
+    utils.write_u16_le(page.data[:], u32(slot_offset + 2), u16(update_len))
 
     // move free space pointer
-    utils.write_val(u16, page.data[:], 8, u16(new_data_offset))
+    utils.write_u16_le(page.data[:], 8, u16(new_data_offset))
     return true
 }
 
@@ -220,11 +220,11 @@ compact_page :: proc(page: ^Page) -> bool {
         write_offset = new_offset
 
         // update slot information
-        utils.write_val(u16, page.data[:], u32(slot.slot_id*SLOT_SIZE + HEADER_SIZE), new_offset)
+        utils.write_u16_le(page.data[:], u32(slot.slot_id*SLOT_SIZE + HEADER_SIZE), new_offset)
         slot.offset = new_offset
     }
 
     // once we are done, update the free space pointer
-    utils.write_val(u16, page.data[:], 8, write_offset)
+    utils.write_u16_le(page.data[:], 8, write_offset)
     return true
 }
