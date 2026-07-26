@@ -11,7 +11,7 @@ import "../utils"
 */
 
 DiskManager :: struct {
-    file: os.Handle,
+    file: ^os.File,
     num_pages: u32,
 }
 
@@ -25,11 +25,23 @@ new_disk_manager :: proc(file_path: string) -> ^DiskManager {
     dm.file = file_handle
     dm.num_pages = 0
 
-    metadata: [pg.PAGE_SIZE]u8
-    utils.write_u32_le(metadata[:], 0, dm.num_pages)
-    os.write(dm.file, metadata[:])
+    file_size, _ := os.file_size(dm.file)
+    if file_size >= i64(pg.PAGE_SIZE) {
+        // existing database: load num_pages from the metadata page
+        metadata: [pg.PAGE_SIZE]u8
+        os.read_at(dm.file, metadata[:], 0)
+        dm.num_pages, _ = utils.read_u32_le(metadata[:], 0)
+    } else {
+        _persist_metadata(dm)
+    }
 
     return dm
+}
+
+_persist_metadata :: proc(dm: ^DiskManager) {
+    metadata: [pg.PAGE_SIZE]u8
+    utils.write_u32_le(metadata[:], 0, dm.num_pages)
+    os.write_at(dm.file, metadata[:], 0)
 }
 
 close_disk_manager :: proc(dm: ^DiskManager) {
@@ -40,6 +52,7 @@ close_disk_manager :: proc(dm: ^DiskManager) {
 
 allocate_page :: proc(dm: ^DiskManager) -> pg.Page {
     dm.num_pages += 1
+    _persist_metadata(dm)
     page := pg.new_page(dm.num_pages)
     defer free(page)
     page_offset := i64(dm.num_pages * pg.PAGE_SIZE)

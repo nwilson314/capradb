@@ -60,6 +60,38 @@ test_write_and_read_page :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_reopen_existing_db :: proc(t: ^testing.T) {
+    path := "/tmp/capradb_test_reopen.db"
+    defer os.remove(path)
+
+    dm := new_disk_manager(path)
+    pg1 := allocate_page(dm)
+    pg2 := allocate_page(dm)
+
+    record := [?]u8{0xCA, 0xFE}
+    page.insert_record(&pg2, record[:])
+    write_page(dm, &pg2)
+    close_disk_manager(dm)
+
+    // Reopen: allocations and data must survive
+    dm2 := new_disk_manager(path)
+    defer close_disk_manager(dm2)
+    testing.expect_value(t, dm2.num_pages, u32(2))
+
+    read_pg, ok := read_page(dm2, pg2.id)
+    testing.expect(t, ok, "read after reopen should succeed")
+    data, get_ok := page.get_record(&read_pg, 0)
+    testing.expect(t, get_ok, "get record after reopen should succeed")
+    testing.expect_value(t, len(data), 2)
+    testing.expect_value(t, data[0], u8(0xCA))
+    testing.expect_value(t, data[1], u8(0xFE))
+
+    // pg1 was allocated but never explicitly written; its id must still be valid
+    _, ok1 := read_page(dm2, pg1.id)
+    testing.expect(t, ok1, "allocated page should still be readable after reopen")
+}
+
+@(test)
 test_write_page_invalid_id :: proc(t: ^testing.T) {
     path := "/tmp/capradb_test_write_invalid.db"
     defer os.remove(path)

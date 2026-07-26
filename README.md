@@ -7,7 +7,7 @@ Previously built in Go (see `go-archive` branch). Starting fresh in Odin to go d
 ## Progress
 
 - [x] Slotted pages — insert, get, update, delete, compaction
-- [ ] Disk manager
+- [x] Disk manager — allocate, read/write pages, metadata page, reopen existing DB
 - [ ] Buffer pool
 - [ ] Heap file + table scan
 - [ ] B+tree index
@@ -26,4 +26,5 @@ Previously built in Go (see `go-archive` branch). Starting fresh in Odin to go d
 ```bash
 odin test page
 odin test utils
+odin test disk
 ```
