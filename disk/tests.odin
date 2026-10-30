@@ -150,3 +150,22 @@ test_write_read_multiple_pages :: proc(t: ^testing.T) {
     testing.expect_value(t, len(data1), 2)
     testing.expect_value(t, data1[0], u8(0xAA))
 }
+
+@(test)
+test_write_page_invalid_page :: proc(t: ^testing.T) {
+    path := "/tmp/capradb_test_write_invalid_page.db"
+    defer os.remove(path)
+
+    dm := new_disk_manager(path)
+    defer free(dm)
+
+    pg := page.new_page(1)
+    defer free(pg)
+    ok := write_page(dm, pg)
+    testing.expect(t, !ok, "write to invalid page should fail -> page does not exist")
+
+    pg1 := page.new_page(0)
+    defer free(pg1)
+    ok = write_page(dm, pg1)
+    testing.expect(t, !ok, "write to invalid page should fail -> page id is 0")
+}

@@ -65,7 +65,7 @@ write_page :: proc(dm: ^DiskManager, page: ^pg.Page) -> bool {
         return false
     }
 
-    if page.id > dm.num_pages {
+    if page.id > dm.num_pages || page.id <= 0 {
         // page unallocated
         return false
     }
