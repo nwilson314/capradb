@@ -14,13 +14,13 @@ Arc :: struct {
     // target size of the MRU list
     p: u32,
     // most recently used list
-    t1: ^list.LinkedList(Entry),
+    t1: ^list.Linked_List(Entry),
     // most frequently used list
-    t2: ^list.LinkedList(Entry),
+    t2: ^list.Linked_List(Entry),
     // ghost MRU list
-    b1: ^list.LinkedList(Entry),
+    b1: ^list.Linked_List(Entry),
     // ghost MFU list
-    b2: ^list.LinkedList(Entry),
+    b2: ^list.Linked_List(Entry),
 
     // index, keyed on frame_id for t1 and t2
     t1_index: map[u32]^list.Node(Entry),
@@ -70,7 +70,7 @@ arc_size :: proc(arc: ^Arc) -> u32 {
 }
 
 // Finds the oldest evictable frame in the list. Returns nil if no evictable frames are found.
-find_victim :: proc(arc: ^Arc, l: ^list.LinkedList(Entry)) -> ^list.Node(Entry) {
+find_victim :: proc(arc: ^Arc, l: ^list.Linked_List(Entry)) -> ^list.Node(Entry) {
     node := l.tail
     if node == nil {
         return nil
@@ -92,9 +92,9 @@ find_victim :: proc(arc: ^Arc, l: ^list.LinkedList(Entry)) -> ^list.Node(Entry) 
 
 evict_from :: proc(
     arc: ^Arc, 
-    src: ^list.LinkedList(Entry), 
+    src: ^list.Linked_List(Entry), 
     src_index: ^map[u32]^list.Node(Entry),
-    ghost: ^list.LinkedList(Entry), 
+    ghost: ^list.Linked_List(Entry), 
     ghost_index: ^map[u32]^list.Node(Entry),
 ) -> (frame_id: u32, ok: bool) {
     node := find_victim(arc, src)

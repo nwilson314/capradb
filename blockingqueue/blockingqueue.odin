@@ -1,30 +1,29 @@
 package blockingqueue
 
-import "core:fmt"
 import "core:sync"
 import "core:mem"
 import list "../linkedlist"
 
-BlockingQueue :: struct($T: typeid) {
-    list: ^list.LinkedList(T),
+Blocking_Queue :: struct($T: typeid) {
+    list: ^list.Linked_List(T),
     mutex: sync.Mutex,
     cond: sync.Cond,
     allocator: mem.Allocator,
 }
 
-new_blocking_queue :: proc($T: typeid) -> ^BlockingQueue(T) {
-    queue := new(BlockingQueue(T))
+new_blocking_queue :: proc($T: typeid) -> ^Blocking_Queue(T) {
+    queue := new(Blocking_Queue(T))
     queue.list = list.new_linked_list(T)
     queue.allocator = context.allocator
     return queue
 }
 
-destroy_blocking_queue :: proc(queue: ^BlockingQueue($T)) {
+destroy_blocking_queue :: proc(queue: ^Blocking_Queue($T)) {
     list.free_linked_list(queue.list)
     free(queue)
 }
 
-push :: proc(q: ^BlockingQueue($T), item: T) {
+push :: proc(q: ^Blocking_Queue($T), item: T) {
     sync.mutex_lock(&q.mutex)
     defer sync.mutex_unlock(&q.mutex)
 
@@ -36,7 +35,7 @@ push :: proc(q: ^BlockingQueue($T), item: T) {
 }
 
 
-pop :: proc(q: ^BlockingQueue($T)) -> T {
+pop :: proc(q: ^Blocking_Queue($T)) -> T {
     sync.mutex_lock(&q.mutex)
     defer sync.mutex_unlock(&q.mutex)
 

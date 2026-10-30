@@ -32,7 +32,7 @@ import pg "../page"
    }
 
    Disk_Scheduler :: struct { ... }   // yours
-   new_disk_scheduler     :: proc(dm: ^disk.DiskManager) -> ^Disk_Scheduler
+   new_disk_scheduler     :: proc(dm: ^disk.Disk_Manager) -> ^Disk_Scheduler
    destroy_disk_scheduler :: proc(s: ^Disk_Scheduler)
    schedule               :: proc(s: ^Disk_Scheduler, req: Disk_Request)
 
@@ -141,7 +141,7 @@ test_03_wait_then_complete :: proc(t: ^testing.T) {
 // ---------------------------------------------------------------------------
 
 // Creates a fresh database file with n_pages allocated (page ids 1..=n_pages).
-_fresh_db :: proc(path: string, n_pages: int) -> ^disk.DiskManager {
+_fresh_db :: proc(path: string, n_pages: int) -> ^disk.Disk_Manager {
 	os.remove(path)
 	dm := disk.new_disk_manager(path)
 	for _ in 0 ..< n_pages {
@@ -150,7 +150,7 @@ _fresh_db :: proc(path: string, n_pages: int) -> ^disk.DiskManager {
 	return dm
 }
 
-_close_db :: proc(dm: ^disk.DiskManager, path: string) {
+_close_db :: proc(dm: ^disk.Disk_Manager, path: string) {
 	disk.close_disk_manager(dm)
 	os.remove(path)
 }

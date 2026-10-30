@@ -10,18 +10,18 @@ import "../utils"
     0-3 (4 bytes): num_pages (u32)
 */
 
-DiskManager :: struct {
+Disk_Manager :: struct {
     file: ^os.File,
     num_pages: u32,
 }
 
-new_disk_manager :: proc(file_path: string) -> ^DiskManager {
+new_disk_manager :: proc(file_path: string) -> ^Disk_Manager {
     file_handle, err := os.open(file_path, os.O_RDWR | os.O_CREATE)
     if err != nil {
         return nil
     }
 
-    dm := new(DiskManager)
+    dm := new(Disk_Manager)
     dm.file = file_handle
     dm.num_pages = 0
 
@@ -38,19 +38,19 @@ new_disk_manager :: proc(file_path: string) -> ^DiskManager {
     return dm
 }
 
-_persist_metadata :: proc(dm: ^DiskManager) {
+_persist_metadata :: proc(dm: ^Disk_Manager) {
     metadata: [pg.PAGE_SIZE]u8
     utils.write_u32_le(metadata[:], 0, dm.num_pages)
     os.write_at(dm.file, metadata[:], 0)
 }
 
-close_disk_manager :: proc(dm: ^DiskManager) {
+close_disk_manager :: proc(dm: ^Disk_Manager) {
     os.close(dm.file)
     free(dm)
 }
 
 
-allocate_page :: proc(dm: ^DiskManager) -> pg.Page {
+allocate_page :: proc(dm: ^Disk_Manager) -> pg.Page {
     dm.num_pages += 1
     _persist_metadata(dm)
     page := pg.new_page(dm.num_pages)
@@ -60,7 +60,7 @@ allocate_page :: proc(dm: ^DiskManager) -> pg.Page {
     return page^
 }
 
-write_page :: proc(dm: ^DiskManager, page: ^pg.Page) -> bool {
+write_page :: proc(dm: ^Disk_Manager, page: ^pg.Page) -> bool {
     if page == nil {
         return false
     }
@@ -75,7 +75,7 @@ write_page :: proc(dm: ^DiskManager, page: ^pg.Page) -> bool {
     return true
 }
 
-read_page :: proc(dm: ^DiskManager, page_id: u32) -> (pg.Page, bool) {
+read_page :: proc(dm: ^Disk_Manager, page_id: u32) -> (pg.Page, bool) {
     if page_id > dm.num_pages || page_id <= 0 {
         return pg.Page{}, false
     }

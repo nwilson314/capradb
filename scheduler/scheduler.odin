@@ -32,8 +32,8 @@ wait :: proc(c: ^Completion) -> bool {
 }
 
 Disk_Scheduler :: struct {
-    dm: ^disk.DiskManager,
-    queue: ^bq.BlockingQueue(Maybe(Disk_Request)),
+    dm: ^disk.Disk_Manager,
+    queue: ^bq.Blocking_Queue(Maybe(Disk_Request)),
     worker: ^thread.Thread,
 }
 
@@ -44,7 +44,7 @@ Disk_Request :: struct {
     done: ^Completion,
 }
 
-new_disk_scheduler :: proc(dm: ^disk.DiskManager) -> ^Disk_Scheduler {
+new_disk_scheduler :: proc(dm: ^disk.Disk_Manager) -> ^Disk_Scheduler {
     sc := new(Disk_Scheduler)
 
     sc.dm = dm

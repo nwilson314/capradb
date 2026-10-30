@@ -186,7 +186,7 @@ update_record :: proc(page: ^Page, slot_id: u16, data: []u8) -> bool {
     return true
 }
 
-SlotInfo :: struct {
+Slot_Info :: struct {
     offset: u16,
     length: u16,
     slot_id: u16,
@@ -197,12 +197,12 @@ compact_page :: proc(page: ^Page) -> bool {
     // first, collect all slot information and sort by offset
     num_slots := _get_slot_count(page)
     // allocate enough space for all slots
-    slot_infos: [(PAGE_SIZE - HEADER_SIZE) / SLOT_SIZE]SlotInfo
+    slot_infos: [(PAGE_SIZE - HEADER_SIZE) / SLOT_SIZE]Slot_Info
     for i in 0..<num_slots {
         offset, length, _ := _get_slot_data(page, i)
-        slot_infos[i] = SlotInfo{offset, length, u16(i)}
+        slot_infos[i] = Slot_Info{offset, length, u16(i)}
     }
-    slice.sort_by(slot_infos[:], proc(a: SlotInfo, b: SlotInfo) -> bool {
+    slice.sort_by(slot_infos[:], proc(a: Slot_Info, b: Slot_Info) -> bool {
         return a.offset > b.offset // sort by offset descending to get slots with highest offsets first
     })
 

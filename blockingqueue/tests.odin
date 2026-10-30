@@ -9,11 +9,11 @@ import "core:mem"
 
  Interface under test (your blockingqueue.odin must provide):
 
-   BlockingQueue :: struct($T: typeid) { ... }
-   new_blocking_queue :: proc($T: typeid) -> ^BlockingQueue(T)
-   destroy            :: proc(q: ^BlockingQueue($T))
-   push               :: proc(q: ^BlockingQueue($T), item: T)
-   pop                :: proc(q: ^BlockingQueue($T)) -> T
+   Blocking_Queue :: struct($T: typeid) { ... }
+   new_blocking_queue :: proc($T: typeid) -> ^Blocking_Queue(T)
+   destroy            :: proc(q: ^Blocking_Queue($T))
+   push               :: proc(q: ^Blocking_Queue($T), item: T)
+   pop                :: proc(q: ^Blocking_Queue($T)) -> T
 
  SPEC DECISIONS (the contract these tests pin down):
 
@@ -96,7 +96,7 @@ test_02_fifo_order :: proc(t: ^testing.T) {
 // ---------------------------------------------------------------------------
 
 Consumer_State :: struct {
-	q:    ^BlockingQueue(int),
+	q:    ^Blocking_Queue(int),
 	got:  int,
 	done: bool, // read/written with sync.atomic_*
 }
@@ -108,7 +108,7 @@ _consume_one :: proc(s: ^Consumer_State) {
 }
 
 Producer_State :: struct {
-	q:     ^BlockingQueue(int),
+	q:     ^Blocking_Queue(int),
 	start: int,
 	count: int,
 }
@@ -125,7 +125,7 @@ _produce_range :: proc(p: ^Producer_State) {
 }
 
 Drain_State :: struct {
-	q:    ^BlockingQueue(int),
+	q:    ^Blocking_Queue(int),
 	take: int,
 	got:  [64]int,
 	n:    int,
@@ -139,7 +139,7 @@ _drain_n :: proc(s: ^Drain_State) {
 }
 
 Discard_State :: struct {
-	q:    ^BlockingQueue(int),
+	q:    ^Blocking_Queue(int),
 	take: int,
 }
 

@@ -1,6 +1,6 @@
 package linkedlist
 
-LinkedList :: struct($T: typeid) {
+Linked_List :: struct($T: typeid) {
     size: u32,
     head: ^Node(T),
     tail: ^Node(T),
@@ -12,14 +12,14 @@ Node :: struct($T: typeid) {
     data: T,
 }
 
-new_linked_list :: proc($T: typeid) -> ^LinkedList(T) {
-    list := new(LinkedList(T))
+new_linked_list :: proc($T: typeid) -> ^Linked_List(T) {
+    list := new(Linked_List(T))
     list.head = nil
     list.tail = nil
     return list
 }
 
-free_linked_list :: proc(list: ^LinkedList($T)) {
+free_linked_list :: proc(list: ^Linked_List($T)) {
     node := list.head
     for node != nil {
         next := node.next
@@ -29,11 +29,11 @@ free_linked_list :: proc(list: ^LinkedList($T)) {
     free(list)
 }
 
-is_empty :: proc(list: ^LinkedList($T)) -> bool {
+is_empty :: proc(list: ^Linked_List($T)) -> bool {
     return list.size == 0
 }
 
-push_front :: proc(list: ^LinkedList($T), node: ^Node(T)) {
+push_front :: proc(list: ^Linked_List($T), node: ^Node(T)) {
     if list.head == nil {
         list.head = node
         list.tail = node
@@ -46,7 +46,7 @@ push_front :: proc(list: ^LinkedList($T), node: ^Node(T)) {
     }
 }
 
-push_back :: proc(list: ^LinkedList($T), node: ^Node(T)) {
+push_back :: proc(list: ^Linked_List($T), node: ^Node(T)) {
     if list.tail == nil {
         list.head = node
         list.tail = node
@@ -59,7 +59,7 @@ push_back :: proc(list: ^LinkedList($T), node: ^Node(T)) {
     }
 }
 
-pop_front :: proc(list: ^LinkedList($T)) -> ^Node(T) {
+pop_front :: proc(list: ^Linked_List($T)) -> ^Node(T) {
     if list.head == nil {
         return nil
     }
@@ -77,7 +77,7 @@ pop_front :: proc(list: ^LinkedList($T)) -> ^Node(T) {
     return node
 }
 
-pop_back :: proc(list: ^LinkedList($T)) -> ^Node(T) {
+pop_back :: proc(list: ^Linked_List($T)) -> ^Node(T) {
     if list.tail == nil {
         return nil
     }
@@ -95,7 +95,7 @@ pop_back :: proc(list: ^LinkedList($T)) -> ^Node(T) {
     return node
 }
 
-remove :: proc(list: ^LinkedList($T), node: ^Node(T)) {
+remove :: proc(list: ^Linked_List($T), node: ^Node(T)) {
     if node == list.head {
         list.head = node.next
         if list.head == nil {
