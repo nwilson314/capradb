@@ -1,6 +1,7 @@
 package disk
 
 import "core:os"
+import "core:sync"
 import pg "../page"
 import "../utils"
 
@@ -13,6 +14,7 @@ import "../utils"
 Disk_Manager :: struct {
     file: ^os.File,
     num_pages: u32,
+    latch: sync.Mutex,
 }
 
 new_disk_manager :: proc(file_path: string) -> ^Disk_Manager {
@@ -51,6 +53,8 @@ close_disk_manager :: proc(dm: ^Disk_Manager) {
 
 
 allocate_page :: proc(dm: ^Disk_Manager) -> pg.Page {
+    sync.mutex_guard(&dm.latch)
+    
     dm.num_pages += 1
     _persist_metadata(dm)
     page := pg.new_page(dm.num_pages)
@@ -61,6 +65,8 @@ allocate_page :: proc(dm: ^Disk_Manager) -> pg.Page {
 }
 
 write_page :: proc(dm: ^Disk_Manager, page: ^pg.Page) -> bool {
+    sync.mutex_guard(&dm.latch)
+    
     if page == nil {
         return false
     }
@@ -76,6 +82,8 @@ write_page :: proc(dm: ^Disk_Manager, page: ^pg.Page) -> bool {
 }
 
 read_page :: proc(dm: ^Disk_Manager, page_id: u32) -> (pg.Page, bool) {
+    sync.mutex_guard(&dm.latch)
+    
     if page_id > dm.num_pages || page_id <= 0 {
         return pg.Page{}, false
     }

@@ -53,9 +53,12 @@ import sc "../scheduler"
     waiters, every one of them gets nil and the LAST one out frees the frame.
 
  5. FLUSH. flush_page writes a dirty page and clears its dirty flag; on a clean
-    page it writes nothing and returns true. Non-resident returns false. It
-    doesn't touch the pin count, and pinned pages may be flushed. Clear the
-    flag BEFORE scheduling the write. flush_all does this for every frame.
+    page it writes nothing and returns true. Non-resident returns false. A
+    flush pins the frame until its write finishes, because the queued write
+    points at the frame and eviction would swap the bytes underneath it. The
+    pin count is back where it started when flush returns, and pinned pages
+    may be flushed. Clear the flag BEFORE scheduling the write. flush_all does
+    this for every frame.
 
  6. DELETE. delete_page on a pinned page returns false. On an unpinned page it
     drops the page WITHOUT writing it, frees the frame (replacer.remove, free
@@ -162,7 +165,7 @@ test_01_create_and_destroy :: proc(t: ^testing.T) {
 
 // ═══════════════════════════════ LADDER GATE ═══════════════════════════════
 // Move this opening marker below the next test to activate it.
-/*
+
 
 @(test)
 test_02_new_page :: proc(t: ^testing.T) {
@@ -212,6 +215,84 @@ test_04_fetch_hit_same_frame :: proc(t: ^testing.T) {
 	testing.expect(t, a == b, "two frames for one page")
 	count, _ := pin_count(bp, 1)
 	testing.expect_value(t, count, u32(2))
+}
+
+// ---------------------------------------------------------------------------
+// A hit on a page that is still loading. Concurrency, made deterministic.
+//
+// _stall_worker parks the scheduler's worker: the test holds the mutex of a
+// Completion, so the worker blocks inside complete() on a dummy request. Every
+// read the pool schedules then sits in the queue until _release_worker, which
+// gives the tests a read that's reliably in flight. No sleep-and-hope.
+// ---------------------------------------------------------------------------
+
+Stall :: struct {
+	gate:    sc.Completion,
+	scratch: pg.Page,
+}
+
+_stall_worker :: proc(s: ^Stall, bp: ^Buffer_Pool) {
+	sync.mutex_lock(&s.gate.mutex)
+	sc.schedule(bp.sched, sc.Disk_Request{page_id = 1, buf = &s.scratch, done = &s.gate})
+	time.sleep(10 * time.Millisecond)
+}
+
+_release_worker :: proc(s: ^Stall) {
+	sync.mutex_unlock(&s.gate.mutex)
+	sc.wait(&s.gate)
+}
+
+Fetch_Job :: struct {
+	bp:       ^Buffer_Pool,
+	page_id:  u32,
+	result:   ^pg.Page,
+	returned: bool, // read/written with sync.atomic_*
+}
+
+_fetch_job :: proc(j: ^Fetch_Job) {
+	j.result = fetch_page(j.bp, j.page_id)
+	sync.atomic_store(&j.returned, true)
+}
+
+_start_fetch :: proc(j: ^Fetch_Job) -> ^thread.Thread {
+	th := thread.create_and_start_with_poly_data(j, _fetch_job, context)
+	time.sleep(20 * time.Millisecond) // let it reach its wait
+	return th
+}
+
+@(test)
+test_04b_second_fetch_waits_for_the_read :: proc(t: ^testing.T) {
+	// The scenario from the design discussion. B hits while A's read is in
+	// flight. B must not return early, and must be pinned while it sleeps.
+	// If this hangs in pin_count, some thread is holding the latch across I/O.
+	path := "/tmp/capradb_bpm_04b.db"
+	dm := _fresh_db(path, 1)
+	defer _close_db(dm, path)
+	bp := new_buffer_pool(3, dm)
+	defer destroy_buffer_pool(bp)
+
+	s: Stall
+	_stall_worker(&s, bp)
+
+	a := Fetch_Job{bp = bp, page_id = 1}
+	b := Fetch_Job{bp = bp, page_id = 1}
+	ta := _start_fetch(&a)
+	defer thread.destroy(ta)
+	tb := _start_fetch(&b)
+	defer thread.destroy(tb)
+
+	testing.expect(t, !sync.atomic_load(&a.returned), "A returned before its read ran")
+	testing.expect(t, !sync.atomic_load(&b.returned), "B returned before the read ran")
+	count, _ := pin_count(bp, 1)
+	testing.expect_value(t, count, u32(2))
+
+	_release_worker(&s)
+	thread.join(ta)
+	thread.join(tb)
+
+	testing.expect(t, a.result != nil && a.result == b.result, "A and B must share one frame")
+	want := _expected(1)
+	testing.expect(t, a.result.data == want.data, "wrong bytes")
 }
 
 @(test)
@@ -540,82 +621,8 @@ test_20_destroy_flushes :: proc(t: ^testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Rung 4 — concurrency, made deterministic.
-//
-// _stall_worker parks the scheduler's worker: the test holds the mutex of a
-// Completion, so the worker blocks inside complete() on a dummy request. Every
-// read the pool schedules then sits in the queue until _release_worker, which
-// gives the tests a read that's reliably in flight. No sleep-and-hope.
+// Rung 4 — concurrency. These use the worker-parking helpers from test_04b.
 // ---------------------------------------------------------------------------
-
-Stall :: struct {
-	gate:    sc.Completion,
-	scratch: pg.Page,
-}
-
-_stall_worker :: proc(s: ^Stall, bp: ^Buffer_Pool) {
-	sync.mutex_lock(&s.gate.mutex)
-	sc.schedule(bp.sched, sc.Disk_Request{page_id = 1, buf = &s.scratch, done = &s.gate})
-	time.sleep(10 * time.Millisecond)
-}
-
-_release_worker :: proc(s: ^Stall) {
-	sync.mutex_unlock(&s.gate.mutex)
-	sc.wait(&s.gate)
-}
-
-Fetch_Job :: struct {
-	bp:       ^Buffer_Pool,
-	page_id:  u32,
-	result:   ^pg.Page,
-	returned: bool, // read/written with sync.atomic_*
-}
-
-_fetch_job :: proc(j: ^Fetch_Job) {
-	j.result = fetch_page(j.bp, j.page_id)
-	sync.atomic_store(&j.returned, true)
-}
-
-_start_fetch :: proc(j: ^Fetch_Job) -> ^thread.Thread {
-	th := thread.create_and_start_with_poly_data(j, _fetch_job, context)
-	time.sleep(20 * time.Millisecond) // let it reach its wait
-	return th
-}
-
-@(test)
-test_21_second_fetch_waits_for_the_read :: proc(t: ^testing.T) {
-	// The scenario from the design discussion. B hits while A's read is in
-	// flight. B must not return early, and must be pinned while it sleeps.
-	// If this hangs in pin_count, some thread is holding the latch across I/O.
-	path := "/tmp/capradb_bpm_21.db"
-	dm := _fresh_db(path, 1)
-	defer _close_db(dm, path)
-	bp := new_buffer_pool(3, dm)
-	defer destroy_buffer_pool(bp)
-
-	s: Stall
-	_stall_worker(&s, bp)
-
-	a := Fetch_Job{bp = bp, page_id = 1}
-	b := Fetch_Job{bp = bp, page_id = 1}
-	ta := _start_fetch(&a)
-	defer thread.destroy(ta)
-	tb := _start_fetch(&b)
-	defer thread.destroy(tb)
-
-	testing.expect(t, !sync.atomic_load(&a.returned), "A returned before its read ran")
-	testing.expect(t, !sync.atomic_load(&b.returned), "B returned before the read ran")
-	count, _ := pin_count(bp, 1)
-	testing.expect_value(t, count, u32(2))
-
-	_release_worker(&s)
-	thread.join(ta)
-	thread.join(tb)
-
-	testing.expect(t, a.result != nil && a.result == b.result, "A and B must share one frame")
-	want := _expected(1)
-	testing.expect(t, a.result.data == want.data, "wrong bytes")
-}
 
 @(test)
 test_22_latch_not_held_across_io :: proc(t: ^testing.T) {
@@ -843,10 +850,118 @@ test_26_stress :: proc(t: ^testing.T) {
 		testing.expect_value(t, c, total)
 	}
 }
-
+/*
 // ---------------------------------------------------------------------------
 // c1 — yours. Write one adversarial test for something the ladder misses.
 // Watch it fail against the bug before you trust it passing.
 // ---------------------------------------------------------------------------
 
 */
+
+Flush_Job :: struct {
+	bp:      ^Buffer_Pool,
+	page_id: u32,
+	ok:      bool,
+}
+
+_flush_job :: proc(j: ^Flush_Job) {
+	j.ok = flush_page(j.bp, j.page_id)
+}
+
+@(test)
+test_c1_flush_in_flight :: proc(t: ^testing.T) {
+	path := "/tmp/capradb_bpm_c1.db"
+	dm := _fresh_db(path, 2)
+	defer _close_db(dm, path)
+
+	bp := new_buffer_pool(1, dm)
+	defer destroy_buffer_pool(bp)
+
+	p := fetch_page(bp, 1)
+	p.data[100] = 0xAB
+	unpin_page(bp, 1, true)
+
+	s: Stall
+	_stall_worker(&s, bp)
+
+	j := Flush_Job{bp = bp, page_id = 1}
+	th := thread.create_and_start_with_poly_data(&j, _flush_job, context)
+	defer thread.destroy(th)
+	time.sleep(20 * time.Millisecond) // let it queue its write and wait
+
+	q := new_page(bp)
+	testing.expect(t, q == nil, "new_page must not evict a frame with a flush in flight")
+
+	_release_worker(&s)
+	thread.join(th)
+	testing.expect(t, j.ok, "flush failed")
+
+	got := _on_disk(path, 1)
+	testing.expect_value(t, got.data[100], u8(0xAB))
+}
+
+@(test)
+test_c2_flush_all_in_flight :: proc(t: ^testing.T) {
+	path := "/tmp/capradb_bpm_c2.db"
+	dm := _fresh_db(path, 2)
+	defer _close_db(dm, path)
+
+	bp := new_buffer_pool(1, dm)
+	defer destroy_buffer_pool(bp)
+
+	p := fetch_page(bp, 1)
+	p.data[100] = 0xAB
+	unpin_page(bp, 1, true)
+
+	s: Stall
+	_stall_worker(&s, bp)
+
+	th := thread.create_and_start_with_poly_data(bp, flush_all, context)
+	defer thread.destroy(th)
+	time.sleep(20 * time.Millisecond) // let it queue its write and wait
+
+	q := new_page(bp)
+	testing.expect(t, q == nil, "new_page must not evict a frame with a flush in flight")
+
+	_release_worker(&s)
+	thread.join(th)
+
+	got := _on_disk(path, 1)
+	testing.expect_value(t, got.data[100], u8(0xAB))
+}
+
+@(test)
+test_c3_random_churn :: proc(t: ^testing.T) {
+	path := "/tmp/capradb_bpm_c3.db"
+	dm := _fresh_db(path, 10)
+	defer _close_db(dm, path)
+
+	bp := new_buffer_pool(3, dm)
+	defer destroy_buffer_pool(bp)
+
+	rng := u32(12345)
+	writes: [11]u8 // writes[id] = how many times we bumped page id
+
+	for _ in 0 ..< 5000 {
+		rng = rng * 1664525 + 1013904223
+		id := (rng >> 16) % 10 + 1
+
+		p := fetch_page(bp, id)
+		if p == nil || p.id != id {
+			testing.expect(t, false, "fetch returned the wrong page")
+			return
+		}
+
+		p.data[300] += 1
+		writes[id] += 1
+		unpin_page(bp, id, true)
+	}
+
+	flush_all(bp)
+
+	for id in u32(1) ..= 10 {
+		got := _on_disk(path, id)
+		want := _expected(id)
+		testing.expect_value(t, got.data[300], want.data[300] + writes[id])
+	}
+}

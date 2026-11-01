@@ -1,5 +1,7 @@
 package replacer
 
+import "core:math/rand"
+import list "../linkedlist"
 import "core:testing"
 
 /*
@@ -511,3 +513,219 @@ test_c7_evict_falls_through_lists_t2 :: proc(t: ^testing.T) {
 }
 /*
 */ // ——— end of ladder gate ———
+
+// ---------------------------------------------------------------------------
+// Round 2 · spec audit (2026-10-31)
+//
+// The ladder above never checked ARC's list bounds at the moment the spec
+// enforces them: when a NEW page is recorded. The course spec trims ghosts in
+// RecordAccess, case 4:
+//   4(a) |T1| + |B1| == c          -> kill B1's LRU ghost, then add to T1
+//   4(b) |T1|+|T2|+|B1|+|B2| == 2c -> kill B2's LRU ghost, then add to T1
+// so after EVERY operation:  |T1| + |B1| <= c  and  |T1|+|T2|+|B1|+|B2| <= 2c.
+// C3 only checked |B1| + |B2| <= 2c, which is looser than both.
+// ---------------------------------------------------------------------------
+
+// C8: the L1 bound. Fill a 4-frame pool with once-seen pages, then take one
+// miss the way the BPM does: evict, then record the new page. When 200
+// arrives, |T1| + |B1| = 3 + 1 = c, so case 4(a) kills page 100's ghost
+// (the one evict just made) before 200 joins T1.
+@(test)
+test_c8_l1_bound_on_new_page :: proc(t: ^testing.T) {
+    arc := new_arc(4)
+    defer destroy_arc(arc)
+
+    for f in u32(0) ..< 4 {
+        record_access(arc, f, 100 + f)
+        set_evictable(arc, f, true)
+    }
+    v, ok := evict(arc) // T1 LRU: frame 0, page 100 -> B1
+    testing.expect(t, ok)
+    testing.expect_value(t, v, u32(0))
+
+    record_access(arc, 0, 200) // new page, case 4(a)
+    set_evictable(arc, 0, true)
+
+    testing.expectf(t, arc.t1.size + arc.b1.size <= arc.c,
+        "|T1| + |B1| = %d after a new page; bound is c = %d", arc.t1.size + arc.b1.size, arc.c)
+    _, ghost := arc.b1_index[100]
+    testing.expect(t, !ghost, "page 100's ghost should have been killed by case 4(a)")
+
+    // Observable through the free-frame path: delete a page, then bring 100
+    // back into the freed frame with no evict in between. Its ghost is gone,
+    // so this is a cold miss and p stays put.
+    remove(arc, 1)
+    record_access(arc, 1, 100)
+    testing.expect_value(t, arc.p, u32(0))
+}
+
+// C9: the 2c bound. With p = 0 and T1 empty, evictions fall through to T2
+// and pile up B2 ghosts until all four lists hold 2c entries. The next new
+// page is case 4(b): kill B2's LRU ghost (page 101) before adding.
+@(test)
+test_c9_directory_bound_on_new_page :: proc(t: ^testing.T) {
+    arc := new_arc(2)
+    defer destroy_arc(arc)
+
+    record_access(arc, 1, 101)
+    record_access(arc, 1, 101) // -> T2
+    record_access(arc, 2, 102)
+    record_access(arc, 2, 102) // -> T2
+    set_evictable(arc, 1, true)
+    set_evictable(arc, 2, true)
+
+    v, _ := evict(arc) // T1 empty -> T2 LRU: frame 1, page 101 -> B2
+    testing.expect_value(t, v, u32(1))
+    record_access(arc, 1, 103)
+    record_access(arc, 1, 103) // -> T2
+    set_evictable(arc, 1, true)
+
+    v, _ = evict(arc) // T2 LRU: frame 2, page 102 -> B2
+    testing.expect_value(t, v, u32(2))
+    record_access(arc, 2, 104)
+    record_access(arc, 2, 104) // -> T2; now T2 = 2, B2 = 2: total = 2c
+    set_evictable(arc, 2, true)
+
+    v, _ = evict(arc) // T2 LRU: frame 1, page 103 -> B2
+    testing.expect_value(t, v, u32(1))
+    record_access(arc, 1, 105) // new page, case 4(b)
+
+    total := arc.t1.size + arc.t2.size + arc.b1.size + arc.b2.size
+    testing.expectf(t, total <= 2 * arc.c, "four lists hold %d entries; bound is 2c = %d", total, 2 * arc.c)
+    _, ghost := arc.b2_index[101]
+    testing.expect(t, !ghost, "page 101 is B2's LRU ghost and should have been killed by case 4(b)")
+}
+
+// Every structural invariant, checked after any operation. Stops at the
+// first violation so a failure reports one cause, not a cascade.
+check_arc_invariants :: proc(t: ^testing.T, arc: ^Arc, seed: u64, step: int) -> bool {
+    t1, t2, b1, b2 := arc.t1.size, arc.t2.size, arc.b1.size, arc.b2.size
+    c := arc.c
+    if !testing.expectf(t, t1 + t2 <= c, "seed %d step %d: |T1|+|T2| = %d > c = %d", seed, step, t1 + t2, c) { return false }
+    if !testing.expectf(t, t1 + b1 <= c, "seed %d step %d: |T1|+|B1| = %d > c = %d", seed, step, t1 + b1, c) { return false }
+    if !testing.expectf(t, t1 + t2 + b1 + b2 <= 2 * c, "seed %d step %d: total = %d > 2c = %d", seed, step, t1 + t2 + b1 + b2, 2 * c) { return false }
+    if !testing.expectf(t, arc.p <= c, "seed %d step %d: p = %d > c = %d", seed, step, arc.p, c) { return false }
+
+    // Indexes agree with their lists.
+    if !testing.expectf(t, u32(len(arc.t1_index)) == t1 && u32(len(arc.t2_index)) == t2 &&
+        u32(len(arc.b1_index)) == b1 && u32(len(arc.b2_index)) == b2,
+        "seed %d step %d: index sizes (%d %d %d %d) != list sizes (%d %d %d %d)", seed, step,
+        len(arc.t1_index), len(arc.t2_index), len(arc.b1_index), len(arc.b2_index), t1, t2, b1, b2) { return false }
+
+    // A page is in at most one list; a frame is in at most one of T1, T2.
+    pages_seen := make(map[u32]bool, context.temp_allocator)
+    frames_seen := make(map[u32]bool, context.temp_allocator)
+    lists := [4]^list.Linked_List(Entry){arc.t1, arc.t2, arc.b1, arc.b2}
+    for l, li in lists {
+        for n := l.head; n != nil; n = n.next {
+            if !testing.expectf(t, !pages_seen[n.data.page_id], "seed %d step %d: page %d appears twice", seed, step, n.data.page_id) { return false }
+            pages_seen[n.data.page_id] = true
+            if li < 2 {
+                if !testing.expectf(t, !frames_seen[n.data.frame_id], "seed %d step %d: frame %d appears twice", seed, step, n.data.frame_id) { return false }
+                frames_seen[n.data.frame_id] = true
+            }
+        }
+    }
+
+    // Only resident frames can be evictable.
+    for f in arc.evictable {
+        _, in1 := arc.t1_index[f]
+        _, in2 := arc.t2_index[f]
+        if !testing.expectf(t, in1 || in2, "seed %d step %d: frame %d is evictable but not resident", seed, step, f) { return false }
+    }
+    return true
+}
+
+// One randomized run, driving the replacer the way the BPM does: fetches
+// (hit, or free frame, or evict), short pins and some long-held ones,
+// unpins, and the occasional delete. Returns false on the first failure.
+run_random_arc :: proc(t: ^testing.T, c: u32, n_pages: u32, steps: int, seed: u64) -> bool {
+    arc := new_arc(c)
+    defer destroy_arc(arc)
+
+    frame_page := make([]u32, c)
+    resident := make([]bool, c)
+    pins := make([]int, c)
+    page_frame := make(map[u32]u32)
+    defer delete(frame_page)
+    defer delete(resident)
+    defer delete(pins)
+    defer delete(page_frame)
+
+    unpin :: proc(arc: ^Arc, pins: []int, f: u32) {
+        pins[f] -= 1
+        if pins[f] == 0 { set_evictable(arc, f, true) }
+    }
+
+    for step in 0 ..< steps {
+        roll := rand.int_max(100)
+        if roll < 70 {
+            // Fetch. Half the time from the hot third of the pages.
+            page := rand.int_max(2) == 0 ? u32(rand.int_max(int(n_pages / 3))) : u32(rand.int_max(int(n_pages)))
+            f, hit := page_frame[page]
+            if !hit {
+                found := false
+                for r, i in resident {
+                    if !r { f = u32(i); found = true; break }
+                }
+                if !found {
+                    v, ok := evict(arc)
+                    if !ok { continue } // every frame pinned: the BPM's fetch fails
+                    if !testing.expectf(t, v < c && resident[v] && pins[v] == 0,
+                        "seed %d step %d: evict returned frame %d, which is pinned or not resident", seed, step, v) { return false }
+                    delete_key(&page_frame, frame_page[v])
+                    resident[v] = false
+                    f = v
+                }
+            }
+            record_access(arc, f, page)
+            if !hit {
+                resident[f] = true
+                frame_page[f] = page
+                page_frame[page] = f
+            }
+            pins[f] += 1
+            if pins[f] == 1 { set_evictable(arc, f, false) }
+            if rand.int_max(100) < 80 { unpin(arc, pins, f) } // most guards are short-lived
+        } else if roll < 95 {
+            // Release one long-held pin, if any.
+            start := rand.int_max(int(c))
+            for k in 0 ..< int(c) {
+                f := u32((start + k) % int(c))
+                if pins[f] > 0 { unpin(arc, pins, f); break }
+            }
+        } else {
+            // Delete a resident, unpinned page: its frame goes back to the free list.
+            start := rand.int_max(int(c))
+            for k in 0 ..< int(c) {
+                f := u32((start + k) % int(c))
+                if resident[f] && pins[f] == 0 {
+                    remove(arc, f)
+                    delete_key(&page_frame, frame_page[f])
+                    resident[f] = false
+                    break
+                }
+            }
+        }
+
+        if !check_arc_invariants(t, arc, seed, step) { return false }
+        want: u32 = 0
+        for r, i in resident { if r && pins[i] == 0 { want += 1 } }
+        if !testing.expectf(t, arc_size(arc) == want,
+            "seed %d step %d: arc_size = %d, but %d frames are resident and unpinned", seed, step, arc_size(arc), want) { return false }
+        free_all(context.temp_allocator)
+    }
+    return true
+}
+
+// C10: randomized invariants. 25 fixed seeds x 2000 BPM-shaped operations on
+// a 4-frame pool over 12 pages (enough reuse for ghost hits on both sides).
+// Fixed seeds make every failure reproducible; the message names the seed
+// and step.
+@(test)
+test_c10_random_ops_keep_invariants :: proc(t: ^testing.T) {
+    for seed in u64(1) ..= 25 {
+        rand.reset(seed)
+        if !run_random_arc(t, 4, 12, 2000, seed) { return }
+    }
+}
