@@ -133,22 +133,6 @@ evict :: proc(arc: ^Arc) -> (frame_id: u32, ok: bool) {
         }
     }
 
-    if ok {
-        // trim ghosts
-        if arc.b1.size + arc.t1.size > arc.c {
-            // evict oldest from B1
-            node := list.pop_back(arc.b1)
-            defer free(node)
-            delete_key(&arc.b1_index, node.data.page_id)
-        }
-        if arc.b2.size + arc.t2.size + arc.t1.size + arc.b1.size > 2 * arc.c {
-            // evict oldest from B2
-            node := list.pop_back(arc.b2)
-            defer free(node)
-            delete_key(&arc.b2_index, node.data.page_id)
-        }
-    }
-
     return frame_id, ok
 }
 
@@ -212,6 +196,24 @@ record_access :: proc(arc: ^Arc, frame_id: u32, page_id: u32) {
     node := new(list.Node(Entry))
     node.data.frame_id = frame_id
     node.data.page_id = page_id
+
+
+    // trim ghosts
+    if arc.b1.size + arc.t1.size >= arc.c {
+        // evict oldest from B1
+        nd := list.pop_back(arc.b1)
+        // B1 should never be empty here in a real application, but it is technically only enforced by the caller
+        assert(nd != nil, "B1 is empty while trimming ghosts, this should never happen")
+        defer free(nd)
+        delete_key(&arc.b1_index, nd.data.page_id)
+    } else if arc.b2.size + arc.t2.size + arc.t1.size + arc.b1.size >= 2 * arc.c {
+        // evict oldest from B2
+        nd := list.pop_back(arc.b2)
+        defer free(nd)
+        delete_key(&arc.b2_index, nd.data.page_id)
+    }
+
+
     list.push_front(arc.t1, node)
     arc.t1_index[frame_id] = node
 }
