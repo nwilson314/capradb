@@ -5,10 +5,13 @@ package main
 //     odin run bench -o:speed -out:bench.bin
 //
 // Each scenario builds a fresh database, warms up, then measures for a fixed
-// window. Page bytes aren't latched yet (that's page guards), so each writer
-// bumps its own counter inside the page and no two threads share a byte. At
-// the end those counters are checked against disk: a run that lost a write
+// window. All access goes through page guards: reads take the frame latch
+// shared, writes exclusive. Each writer bumps its own counter inside the page.
+// At the end those counters are checked against disk: a run that lost a write
 // reports FAIL, whatever its throughput was.
+//
+// Before guards (2026-11-02, raw fetch_page/unpin_page, no frame latch), in
+// ops/s: A 6.2M, B 1.1M, C 207K, D 362K, E 2.6M, F 2.2M gets + 76K scans.
 //
 // Hit rate is sampled by peeking at the page table on every 16th op. An
 // in-flight read counts as a hit, since that fetch doesn't schedule its own.
@@ -122,24 +125,32 @@ _run_worker :: proc(w: ^Worker) {
             sync.atomic_store_explicit(&w.hits, hits, .Relaxed)
         }
 
-        p := bpm.fetch_page(w.bp, id)
-        if p == nil || p.id != id {
-            sync.atomic_add_explicit(&w.failures, 1, .Relaxed)
-            if p != nil do bpm.unpin_page(w.bp, id, false)
-            continue
-        }
+        // A guard's mode is chosen at fetch, so the read/write coin is flipped
+        // first. Same draw order as before guards: page id, then the coin.
+        is_write := !w.is_scan && _next(w) % 100 < w.scenario.write_percent
 
-        dirty := false
-        if !w.is_scan && _next(w) % 100 < w.scenario.write_percent {
+        if is_write {
+            g, ok := bpm.fetch_page_write(w.bp, id)
+            if !ok || g.page.id != id {
+                sync.atomic_add_explicit(&w.failures, 1, .Relaxed)
+                bpm.release_write(&g) // no-op on a failed fetch
+                continue
+            }
             offset := _counter_offset(w.index)
-            c, _ := utils.read_u32_le(p.data[:], offset)
-            utils.write_u32_le(p.data[:], offset, c + 1)
+            c, _ := utils.read_u32_le(g.page.data[:], offset)
+            utils.write_u32_le(g.page.data[:], offset, c + 1)
             w.writes[id] += 1
-            dirty = true
+            bpm.release_write(&g)
         } else {
-            w.sink += u64(p.data[0])
+            g, ok := bpm.fetch_page_read(w.bp, id)
+            if !ok || g.page.id != id {
+                sync.atomic_add_explicit(&w.failures, 1, .Relaxed)
+                bpm.release_read(&g)
+                continue
+            }
+            w.sink += u64(g.page.data[0])
+            bpm.release_read(&g)
         }
-        bpm.unpin_page(w.bp, id, dirty)
 
         n += 1
         sync.atomic_store_explicit(&w.ops, n, .Relaxed)
